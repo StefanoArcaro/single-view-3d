@@ -1,0 +1,7 @@
+[project]
+name = "single-view-3d"
+version = "0.1.0"
+description = "Experiments for constrained 3D reconstruction from a single view of a scene"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []

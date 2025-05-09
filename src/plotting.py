@@ -3,6 +3,9 @@ from typing import Literal
 import cv2
 import numpy as np
 
+from src.enums import Shape
+from src.shapes import box_geometry, pyramid_geometry, octahedron_geometry
+
 
 def compute_anchor_point(
     template_corners_3d: np.ndarray, anchor: Literal["origin", "center"] = "center"
@@ -191,57 +194,128 @@ def draw_3d_shape(
     R: np.ndarray,
     t: np.ndarray,
     K: np.ndarray,
-    shape_pts_3d: np.ndarray,
-    edges: list[tuple[int, int]],
+    shape: Shape,
+    shape_pts_3d: np.ndarray | None = None,
+    edges: list[tuple[int, int]] | None = None,
+    width: float = 1.0,
+    height: float = 1.0,
+    depth: float = 1.0,
+    flip_z: bool = True,
     color: tuple[int, int, int] = (0, 255, 255),
     thickness: int = 10,
 ) -> np.ndarray:
     """
-    Draw a 3D wireframe shape defined by arbitrary vertices and edges.
+    Draw a 3D wireframe shape (box, pyramid or custom) onto an image.
 
     Args:
-        image (np.ndarray): Input RGB or grayscale image. A copy is returned with the shape drawn.
-        R (np.ndarray): Rotation matrix from world to camera (3×3).
-        t (np.ndarray): Translation vector from world to camera (3,).
-        K (np.ndarray): Camera intrinsic matrix (3×3).
-        shape_pts_3d (np.ndarray): Array of shape (N, 3) representing the 3D vertices of the shape.
-        edges (list[tuple[int, int]]): List of index pairs defining edges between vertices.
-        color (tuple[int, int, int]): RGB color of the shape. Defaults to (0, 255, 255).
-        thickness (int): Line thickness in pixels. Defaults to 10.
+        image (np.ndarray): Input grayscale or RGB image.
+        R (np.ndarray): Rotation matrix (3×3).
+        t (np.ndarray): Translation vector (3,).
+        K (np.ndarray): Camera intrinsics (3×3).
+        shape (Shape): Enum specifying the shape.
+            If CUSTOM, shape_pts_3d and edges must be provided.
+        shape_pts_3d (np.ndarray, optional): 3D points of the shape (N, 3).
+        edges (list[tuple[int, int]], optional): List of edges defined by pairs of indices.
+        width (float): Width of the box or pyramid base.
+        height (float): Height of the box or pyramid.
+        depth (float): Depth of the box or pyramid.
+        flip_z (bool): If True, draw the shape with its top at Z=depth.
+        color (tuple): RGB line color.
+        thickness (int): Line thickness.
 
     Returns:
-        np.ndarray: Copy of `image` with the 3D shape drawn in RGB.
+        np.ndarray: Copy of image with shape drawn in RGB.
 
     Raises:
-        ValueError: If the input shapes are incorrect or if the image is not in the expected format.
+        ValueError: For invalid inputs.
     """
-    # 1. Validate inputs
+    # Validate core inputs
     if R.shape != (3, 3):
-        raise ValueError(f"Rotation matrix R must be of shape (3, 3), got {R.shape}.")
+        raise ValueError(f"R must be 3×3, got {R.shape}")
     if t.shape != (3,):
-        raise ValueError(f"Translation vector t must be of shape (3,), got {t.shape}.")
+        raise ValueError(f"t must be 3-vector, got {t.shape}")
     if K.shape != (3, 3):
-        raise ValueError(f"Camera matrix K must be of shape (3, 3), got {K.shape}.")
+        raise ValueError(f"K must be 3×3, got {K.shape}")
     if image.ndim not in (2, 3):
-        raise ValueError(
-            f"Image must be a 2D grayscale or 3D RGB image, got {image.ndim} dimensions."
-        )
-    if shape_pts_3d.ndim != 2 or shape_pts_3d.shape[1] != 3:
-        raise ValueError(
-            f"shape_pts_3d must be of shape (N, 3), got {shape_pts_3d.shape}."
-        )
+        raise ValueError(f"Image must be 2D or 3D, got {image.ndim} dims")
 
-    # 2. Project shape vertices into image space
-    shape_pts_image = project_points(shape_pts_3d, R, t, K).astype(int)
+    # Determine geometry
+    match shape:
+        case Shape.BOX:
+            pts3d, edges_list = box_geometry(width, height, depth, flip_z)
+        case Shape.PYRAMID:
+            pts3d, edges_list = pyramid_geometry(width, height, depth, flip_z)
+        case Shape.OCTAHEDRON:
+            pts3d, edges_list = octahedron_geometry(depth, flip_z)
+        case Shape.CUSTOM:
+            if shape_pts_3d is None or edges is None:
+                raise ValueError("CUSTOM shape requires both shape_pts_3d and edges")
+            pts3d, edges_list = shape_pts_3d, edges
+        case _:
+            raise ValueError(f"Unsupported shape: {shape}")
 
-    # 3. Ensure the image is in RGB format
+    # Project the vertices into image space
+    img_pts = project_points(pts3d, R, t, K).astype(int)
+
+    # Draw the edges
     out = image.copy() if image.ndim == 3 else cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+    for i, j in edges_list:
+        cv2.line(out, tuple(img_pts[i]), tuple(img_pts[j]), color, thickness)
 
-    # 4. Draw the edges of the shape
-    for i, j in edges:
-        cv2.line(
-            out, tuple(shape_pts_image[i]), tuple(shape_pts_image[j]), color, thickness
-        )
+    return out
+
+
+# =============================================================
+
+# This function is mostly for my own understanding, as it should just plot a point as the
+# camera gaze, as the arrow show be going in the Z direction, which is the camera's forward axis.
+
+
+def draw_camera_gaze(
+    image: np.ndarray,
+    R: np.ndarray,
+    t: np.ndarray,
+    K: np.ndarray,
+    origin_3d: np.ndarray = np.array([0.5, 0.5, 0.0]),
+    length: float = 0.5,
+    color: tuple = (0, 255, 255),
+    thickness: int = 2,
+    tip_length: float = 0.1,
+) -> np.ndarray:
+    """
+    Draw the camera’s gaze (forward Z) as an arrow, starting from a point on the world plane.
+
+    Args:
+        image (ndarray): BGR image to draw on.
+        R (ndarray): 3×3 rotation (world→camera).
+        t (ndarray): 3×1 translation (world→camera).
+        K (ndarray): 3×3 intrinsic matrix.
+        origin_3d (ndarray): 3D point (X,Y,Z) on your plane where the arrow starts.
+        length (float): Arrow length in the same units as origin_3d.
+        color (tuple): BGR color of the arrow.
+        thickness (int): Line thickness.
+        tip_length (float): Proportion of arrow length for the head.
+
+    Returns:
+        ndarray: Copy of image with gaze arrow drawn.
+    """
+    # 1. Compute the camera’s forward axis in world coords
+    gaze_world = R.T[:, 2]
+
+    # 2. Define arrow endpoints in world space
+    P0 = origin_3d
+    P1 = origin_3d + length * gaze_world
+
+    pts_3d = np.vstack([P0, P1]).astype(np.float32).reshape(-1, 3)
+
+    # 3. Project into image
+    rvec, _ = cv2.Rodrigues(R)
+    img_pts, _ = cv2.projectPoints(pts_3d, rvec, t, K, None)
+    p0, p1 = img_pts.reshape(-1, 2).astype(int)
+
+    # 4. Draw arrow
+    out = image.copy()
+    cv2.arrowedLine(out, tuple(p0), tuple(p1), color, thickness, tipLength=tip_length)
 
     return out
 
@@ -328,56 +402,82 @@ def draw_box(
     return draw_3d_shape(image, R, t, K, corners_3d, edges, edge_color, thickness)
 
 
-# =============================================================
-
-# This function is mostly for my own understanding, as it should just plot a point as the
-# camera gaze, as the arrow show be going in the Z direction, which is the camera's forward axis.
-
-
-def draw_camera_gaze(
+def draw_pyramid(
     image: np.ndarray,
     R: np.ndarray,
     t: np.ndarray,
     K: np.ndarray,
-    origin_3d: np.ndarray = np.array([0.5, 0.5, 0.0]),
-    length: float = 0.5,
-    color: tuple = (0, 255, 255),
-    thickness: int = 2,
-    tip_length: float = 0.1,
+    vertices_3d: np.ndarray | None = None,
+    base_width: float = 1.0,
+    base_depth: float = 1.0,
+    height: float = 1.0,
+    edge_color: tuple[int, int, int] = (0, 255, 255),
+    thickness: int = 10,
+    flip_z: bool = True,
 ) -> np.ndarray:
     """
-    Draw the camera’s gaze (forward Z) as an arrow, starting from a point on the world plane.
+    Draw a 3D rectangular-based pyramid by projecting and connecting its corners.
+
+    If `vertices_3d` is None, constructs a default pyramid with base on Z=0 and apex along +Z.
 
     Args:
-        image (ndarray): BGR image to draw on.
-        R (ndarray): 3×3 rotation (world→camera).
-        t (ndarray): 3×1 translation (world→camera).
-        K (ndarray): 3×3 intrinsic matrix.
-        origin_3d (ndarray): 3D point (X,Y,Z) on your plane where the arrow starts.
-        length (float): Arrow length in the same units as origin_3d.
-        color (tuple): BGR color of the arrow.
-        thickness (int): Line thickness.
-        tip_length (float): Proportion of arrow length for the head.
+        image (np.ndarray): Input RGB or grayscale image. A copy is returned with the pyramid drawn.
+        R (np.ndarray): Rotation matrix from world to camera (3×3).
+        t (np.ndarray): Translation vector from world to camera (3,).
+        K (np.ndarray): Camera intrinsic matrix (3×3).
+        vertices_3d (np.ndarray, optional): Array of shape (5, 3) representing the 3D pyramid vertices.
+            If None, a default pyramid is constructed.
+        base_width (float): Width of the pyramid base in world units (along X). Defaults to 1.0.
+        base_depth (float): Depth of the pyramid base in world units (along Y). Defaults to 1.0.
+        height (float): Height of the pyramid from base to apex along Z. Defaults to 1.0.
+        edge_color (tuple[int, int, int]): RGB color of the pyramid edges. Defaults to (0, 255, 255).
+        thickness (int): Line thickness in pixels. Defaults to 10.
+        flip_z (bool): If True, draw the pyramid with the apex along +Z. Defaults to True.
 
     Returns:
-        ndarray: Copy of image with gaze arrow drawn.
+        np.ndarray: Copy of `image` with the 3D pyramid drawn in RGB.
+
+    Raises:
+        ValueError: If the input shapes are incorrect or if the image is not in the expected format.
     """
-    # 1. Compute the camera’s forward axis in world coords
-    gaze_world = R.T[:, 2]
+    if R.shape != (3, 3):
+        raise ValueError(f"Rotation matrix R must be of shape (3, 3), got {R.shape}.")
+    if t.shape != (3,):
+        raise ValueError(f"Translation vector t must be of shape (3,), got {t.shape}.")
+    if K.shape != (3, 3):
+        raise ValueError(f"Camera matrix K must be of shape (3, 3), got {K.shape}.")
+    if image.ndim not in (2, 3):
+        raise ValueError(f"Image must be 2D or 3D, got {image.ndim} dimensions.")
+    if vertices_3d is not None and (vertices_3d.ndim != 2 or vertices_3d.shape[1] != 3):
+        raise ValueError(
+            f"vertices_3d must be of shape (5, 3), got {vertices_3d.shape}."
+        )
 
-    # 2. Define arrow endpoints in world space
-    P0 = origin_3d
-    P1 = origin_3d + length * gaze_world
+    # Construct default pyramid geometry if needed
+    if vertices_3d is None:
+        base = np.array(
+            [
+                [0, 0, 0],
+                [base_width, 0, 0],
+                [base_width, base_depth, 0],
+                [0, base_depth, 0],
+            ],
+            dtype=float,
+        )
+        apex_h = -height if flip_z else height
+        apex = np.array([[base_width / 2, base_depth / 2, apex_h]], dtype=float)
+        vertices_3d = np.vstack([base, apex])
 
-    pts_3d = np.vstack([P0, P1]).astype(np.float32).reshape(-1, 3)
+    # Define edges (base perimeter + sides to apex)
+    edges = [
+        (0, 1),
+        (1, 2),
+        (2, 3),
+        (3, 0),  # base
+        (0, 4),
+        (1, 4),
+        (2, 4),
+        (3, 4),  # sides
+    ]
 
-    # 3. Project into image
-    rvec, _ = cv2.Rodrigues(R)
-    img_pts, _ = cv2.projectPoints(pts_3d, rvec, t, K, None)
-    p0, p1 = img_pts.reshape(-1, 2).astype(int)
-
-    # 4. Draw arrow
-    out = image.copy()
-    cv2.arrowedLine(out, tuple(p0), tuple(p1), color, thickness, tipLength=tip_length)
-
-    return out
+    return draw_3d_shape(image, R, t, K, vertices_3d, edges, edge_color, thickness)

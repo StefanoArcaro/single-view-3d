@@ -1,47 +1,44 @@
 import numpy as np
 
-# Predefined edges
+# fmt: off
+
+# Predefined edges for various shapes
 BOX_EDGES = [
-    (0, 1),  # base
-    (1, 2),  # base
-    (2, 3),  # base
-    (3, 0),  # base
-    (4, 5),  # top
-    (5, 6),  # top
-    (6, 7),  # top
-    (7, 4),  # top
-    (0, 4),  # verticals
-    (1, 5),  # verticals
-    (2, 6),  # verticals
-    (3, 7),  # verticals
+    (0, 1), (1, 2), (2, 3), (3, 0),  # base
+    (4, 5), (5, 6), (6, 7), (7, 4),  # top
+    (0, 4), (1, 5), (2, 6), (3, 7),  # verticals
 ]
 
 PYRAMID_EDGES = [
-    (0, 1),  # base
-    (1, 2),  # base
-    (2, 3),  # base
-    (3, 0),  # base
-    (0, 4),  # sides
-    (1, 4),  # sides
-    (2, 4),  # sides
-    (3, 4),  # sides
+    (0, 1), (1, 2), (2, 3), (3, 0),  # base
+    (0, 4), (1, 4), (2, 4), (3, 4),  # sides
 ]
 
-# Octahedron has 6 vertices and 12 edges
 OCTAHEDRON_EDGES = [
-    (0, 2),  # connect vertex 0 to the “equatorial” ring
-    (0, 3),  # connect vertex 0 to the "equatorial" ring
-    (0, 4),  # connect vertex 0 to the "equatorial" ring
-    (0, 5),  # connect vertex 0 to the “equatorial” ring
-    (1, 2),  # connect vertex 1 to the ring
-    (1, 3),  # connect vertex 1 to the ring
-    (1, 4),  # connect vertex 1 to the ring
-    (1, 5),  # connect vertex 1 to the ring
-    (2, 3),  # ring edges
-    (3, 4),  # ring edges
-    (4, 5),  # ring edges
-    (5, 2),  # ring edges
+    (0, 2), (0, 3), (0, 4), (0, 5),  # connect vertex 0 to the “equatorial” ring
+    (1, 2), (1, 3), (1, 4), (1, 5),  # connect vertex 1 to the ring
+    (2, 3), (3, 4), (4, 5), (5, 2),  # ring edges
 ]
+
+HOUSE_EDGES = [
+    # Base rectangle
+    (0, 1), (1, 2), (2, 3), (3, 0),
+
+    # Top rectangle (flat top of body)
+    (4, 5), (5, 6), (6, 7), (7, 4),
+
+    # Vertical edges
+    (0, 4), (1, 5), (2, 6), (3, 7),
+
+    # Roof ridge
+    (8, 9),
+
+    # Roof sides from top face to ridge
+    (4, 8), (5, 8),  # front triangle
+    (6, 9), (7, 9),  # back triangle
+]
+
+# fmt: on
 
 
 def box_geometry(
@@ -171,3 +168,57 @@ def octahedron_geometry(
     vertices = np.vstack([bottom, top, ring])
 
     return vertices, OCTAHEDRON_EDGES
+
+
+def house_geometry(
+    width: float = 1.0,
+    height: float = 1.0,
+    depth: float = 1.5,
+    flip_z: bool = True,
+) -> tuple[np.ndarray, list[tuple[int, int]]]:
+    """
+    Generate 10 vertices for a simple 'house' shape: a box base + gable roof.
+
+    The house stands on the base Z=0, aligned with the Z axis. The body of the house
+    takes up 2/3 of the depth, and the triangular roof occupies the top 1/3.
+
+    Args:
+        width (float): Width along X.
+        height (float): Height along Y.
+        depth (float): Total height of the house (Z axis).
+        flip_z (bool): If True, house grows downward in Z. Defaults to True.
+
+    Returns:
+        vertices (np.ndarray): (10, 3) array of 3D points.
+        edges (list[tuple[int, int]]): wireframe edges connecting the vertices.
+    """
+    # Depth breakdown
+    body_depth = (2 / 3) * depth
+    roof_depth = depth - body_depth
+
+    # Z-axis direction
+    z_sign = -1 if flip_z else 1
+
+    # Base corners at Z = 0
+    base = np.array(
+        [
+            [0, 0, 0],
+            [width, 0, 0],
+            [width, height, 0],
+            [0, height, 0],
+        ]
+    )
+
+    # Top of the rectangular body at Z = body_depth
+    body_top_z = z_sign * body_depth
+    top = base + np.array([0, 0, body_top_z])
+
+    # Roof ridge points centered on the short sides (along Y axis)
+    ridge_z = body_top_z + z_sign * roof_depth
+    front_ridge = np.array([[width / 2, 0, ridge_z]])
+    back_ridge = np.array([[width / 2, height, ridge_z]])
+
+    # Stack all 10 vertices: base (0–3), top (4–7), ridge (8–9)
+    vertices = np.vstack([base, top, front_ridge, back_ridge])
+
+    return vertices, HOUSE_EDGES

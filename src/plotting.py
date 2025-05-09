@@ -4,7 +4,12 @@ import cv2
 import numpy as np
 
 from src.enums import Shape
-from src.shapes import box_geometry, pyramid_geometry, octahedron_geometry
+from src.shapes import (
+    box_geometry,
+    pyramid_geometry,
+    octahedron_geometry,
+    house_geometry,
+)
 
 
 def compute_anchor_point(
@@ -247,6 +252,8 @@ def draw_3d_shape(
             pts3d, edges_list = pyramid_geometry(width, height, depth, flip_z)
         case Shape.OCTAHEDRON:
             pts3d, edges_list = octahedron_geometry(depth, flip_z)
+        case Shape.HOUSE:
+            pts3d, edges_list = house_geometry(width, height, depth, flip_z)
         case Shape.CUSTOM:
             if shape_pts_3d is None or edges is None:
                 raise ValueError("CUSTOM shape requires both shape_pts_3d and edges")

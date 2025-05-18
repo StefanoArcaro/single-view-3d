@@ -6,9 +6,9 @@ import numpy as np
 from src.enums import Shape
 from src.shapes import (
     box_geometry,
-    pyramid_geometry,
-    octahedron_geometry,
     house_geometry,
+    octahedron_geometry,
+    pyramid_geometry,
 )
 
 
@@ -51,7 +51,6 @@ def generate_corners_from_shape(shape: tuple[int, int]) -> np.ndarray:
 
     Args:
         shape (tuple[int, int]): Width and height of the planar template in pixel units.
-        # TODO maybe change to world units? Problem with camera calibration matrix
 
     Returns:
         np.ndarray: Array of shape (4, 3) with corners in order [top-left, top-right, bottom-right, bottom-left].

@@ -26,7 +26,6 @@ class Distance(BaseModel):
     from_: str = Field(..., alias="from")
     to: str
     distance: float
-    note: Optional[str] = None
 
     def __str__(self) -> str:
         return f"{self.from_} <-> {self.to} = {self.distance}"
@@ -37,6 +36,16 @@ class Scene(BaseModel):
     label: Optional[str] = None
     path: Optional[str] = None
     distances: List[Distance]
+
+    def get_distance(self, from_id: str, to_id: str) -> Distance | None:
+        for d in self.distances:
+            print(f"Searching for distance between {from_id} and {to_id}")
+            print(f"from_ = {d.from_}, to = {d.to}")
+            if (d.from_ == from_id and d.to == to_id) or (
+                d.from_ == to_id and d.to == from_id
+            ):
+                return d
+        return None
 
     def __str__(self) -> str:
         header = f"[{self.id}] {self.label or 'no label'}"

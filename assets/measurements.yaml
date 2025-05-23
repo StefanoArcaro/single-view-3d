@@ -1,0 +1,67 @@
+unit: mm  # Global unit used throughout the file (e.g., mm, cm, in)
+
+templates:
+  - id: T1
+    label: "DA Card"
+    path: "assets/templates/template_00.jpg"
+    width: 85.0
+    height: 55.0
+
+  - id: T2
+    label: "Bookmark"
+    path: "assets/templates/template_01.jpg"
+    width: 50.0
+    height: 180.0
+
+scenes:
+  - id: S1
+    label: "Frontal Bookmark"
+    path: "assets/images/scene_00.jpg"
+    distances:
+      - from: Camera
+        to: T2
+        distance: 390.0
+
+  - id: S2
+    label: "Frontal DA Card - Far"
+    path: "assets/images/scene_01.jpg"
+    distances:
+      - from: Camera
+        to: T1
+        distance: 490.0
+
+  - id: S3
+    label: "Frontal DA Card - Close"
+    path: "assets/images/scene_02.jpg"
+    distances:
+      - from: Camera
+        to: T1
+        distance: 225.0
+
+  - id: S4
+    label: "Both templates - Angled View"
+    path: "assets/images/scene_03.jpg"
+    distances:
+      - from: Camera
+        to: T1
+        distance: 330.0
+
+      - from: Camera
+        to: T2
+        distance: 380.0
+  
+  - id: S5
+    label: "Both templates - Another Angle"
+    path: "assets/images/scene_04.jpg"
+    distances:
+      - from: Camera
+        to: T1
+        distance: 360.0
+
+      - from: Camera
+        to: T2
+        distance: 260.0
+
+      - from: T1
+        to: T2
+        distance: 190.0

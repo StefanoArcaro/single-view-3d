@@ -39,8 +39,6 @@ class Scene(BaseModel):
 
     def get_distance(self, from_id: str, to_id: str) -> Distance | None:
         for d in self.distances:
-            print(f"Searching for distance between {from_id} and {to_id}")
-            print(f"from_ = {d.from_}, to = {d.to}")
             if (d.from_ == from_id and d.to == to_id) or (
                 d.from_ == to_id and d.to == from_id
             ):

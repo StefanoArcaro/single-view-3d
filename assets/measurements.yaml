@@ -84,6 +84,7 @@ scenes:
     
   - id: S6
     label: "Both templates - Another Angle v3"
+    path: "assets/images/scene_06.jpg"
     distances:
       - from: Camera
         to: T0
@@ -99,6 +100,7 @@ scenes:
 
   - id: S7
     label: "Both templates (Overlap)"
+    path: "assets/images/scene_07.jpg"
     distances:
       - from: Camera
         to: T0
@@ -114,6 +116,7 @@ scenes:
       
   - id: S8
     label: "Both templates (Overlap) - Large Angle"
+    path: "assets/images/scene_08.jpg"
     distances:
       - from: Camera
         to: T0

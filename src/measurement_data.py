@@ -68,6 +68,24 @@ class MeasurementData(BaseModel):
     def get_scene(self, scene_id: str) -> Scene:
         return self._scene_lookup.get(scene_id)
 
+    def get_all_scenes(self):
+        """
+        Returns a dictionary of all scenes indexed by their IDs.
+        The values are lists of the templates used in each scene.
+        """
+        all_scenes = {}
+        for scene in self.scenes:
+            templates = set()
+            for dist in scene.distances:
+                from_obj = self.get_template(dist.from_)
+                to_obj = self.get_template(dist.to)
+                if from_obj is not None:
+                    templates.add(from_obj.id)
+                if to_obj is not None:
+                    templates.add(to_obj.id)
+            all_scenes[scene.id] = list(templates)
+        return all_scenes
+
     def get_distance(self, scene_id: str, from_id: str, to_id: str) -> Optional[float]:
         scene = self.get_scene(scene_id)
         if not scene:

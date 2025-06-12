@@ -1,6 +1,267 @@
 import numpy as np
 
 
+def derive_metric_homography(
+    H_px: np.ndarray,
+    template_size_px: tuple[float, float],
+    template_size_metric: tuple[float, float],
+    template_origin_px: tuple[float, float] = (0.0, 0.0),
+    template_origin_metric: tuple[float, float] = (0.0, 0.0),
+) -> np.ndarray:
+    """
+    Derive a homography that maps real-world template coordinates (in metric units)
+    directly to scene image pixel coordinates.
+
+    This function combines a pixel-to-pixel homography with scaling and translation
+    transformations to enable direct mapping from metric coordinates to image pixels.
+
+    Coordinate System Conventions:
+    - template_size_px: (height, width) in pixels (following image shape convention)
+    - template_size_metric: (height, width) in metric units
+    - Origins (both pixel and metric): (x, y) coordinates (following OpenCV point convention)
+      where x corresponds to width/column direction, y to height/row direction
+
+    Mathematical Pipeline:
+    The transformation chain converts metric coordinates to image pixels through:
+    1. Translate metric origin to (0,0): T1 = translate(-X0_m, -Y0_m)
+    2. Scale metric units to pixels: S = scale(width_px/width_m, height_px/height_m)
+    3. Translate to template pixel origin: T2 = translate(u0_px, v0_px)
+    4. Apply template-to-image homography: H_px
+
+    Final mapping: H_metric = H_px @ T2 @ S @ T1
+
+    Args:
+        H_px (np.ndarray): 3x3 homography matrix mapping template pixel coordinates
+            [u_px, v_px, 1]^T to scene image pixel coordinates [u_img, v_img, 1]^T.
+        template_size_px (tuple[float, float]): Template dimensions in pixels as
+            (height, width). Must be positive values.
+        template_size_metric (tuple[float, float]): Template dimensions in metric
+            units as (height, width). Must be positive values.
+        template_origin_px (tuple[float, float], optional): Pixel coordinates (x, y)
+            in the template image corresponding to the metric origin. Defaults to (0, 0)
+            which is the top-left corner.
+        template_origin_metric (tuple[float, float], optional): Real-world coordinates
+            (x, y) in metric units that serve as the origin. Defaults to (0, 0).
+
+    Returns:
+        np.ndarray: 3x3 homography matrix mapping metric coordinates [X_m, Y_m, 1]^T
+            to scene image pixel coordinates [u_img, v_img, 1]^T.
+
+    Raises:
+        ValueError: If input dimensions are invalid or homography shape is incorrect.
+
+    Example:
+        >>> # Template: 100x200 pixels, represents 0.5x1.0 meters
+        >>> H_px = np.eye(3)  # Identity homography for this example
+        >>> template_size_px = (100, 200)      # (height, width) in pixels
+        >>> template_size_metric = (0.5, 1.0)  # (height, width) in meters
+        >>> H_metric = derive_metric_homography(H_px, template_size_px, template_size_metric)
+        >>> # Now H_metric maps (X_meters, Y_meters, 1) -> (u_pixels, v_pixels, 1)
+    """
+    # Input validation
+    if not isinstance(H_px, np.ndarray) or H_px.shape != (3, 3):
+        raise ValueError(
+            f"H_px must be a 3x3 numpy array, got shape: {getattr(H_px, 'shape', 'not an array')}"
+        )
+
+    if len(template_size_px) != 2 or len(template_size_metric) != 2:
+        raise ValueError(
+            "template_size_px and template_size_metric must be tuples of length 2"
+        )
+
+    if len(template_origin_px) != 2 or len(template_origin_metric) != 2:
+        raise ValueError(
+            "template_origin_px and template_origin_metric must be tuples of length 2"
+        )
+
+    # Validate that dimensions are positive
+    h_px, w_px = template_size_px
+    h_m, w_m = template_size_metric
+
+    if h_px <= 0 or w_px <= 0:
+        raise ValueError(
+            f"Template pixel dimensions must be positive, got: height={h_px}, width={w_px}"
+        )
+
+    if h_m <= 0 or w_m <= 0:
+        raise ValueError(
+            f"Template metric dimensions must be positive, got: height={h_m}, width={w_m}"
+        )
+
+    # Check for numerical validity of the input homography
+    if np.any(~np.isfinite(H_px)):
+        raise ValueError("H_px contains non-finite values (NaN or inf)")
+
+    # Extract origin coordinates (using x, y convention for points)
+    u0_px, v0_px = template_origin_px  # x, y in pixel coordinates
+    X0_m, Y0_m = template_origin_metric  # x, y in metric coordinates
+
+    # Step 1: Translate metric origin to (0,0) in metric coordinate system
+    # This moves the metric coordinate frame so that template_origin_metric becomes (0,0)
+    T1 = np.array(
+        [[1.0, 0.0, -X0_m], [0.0, 1.0, -Y0_m], [0.0, 0.0, 1.0]], dtype=np.float64
+    )
+
+    # Step 2: Scale from metric units to template pixel units
+    # Scale factors convert metric dimensions to pixel dimensions
+    s_x = w_px / w_m  # pixels per metric unit in x (width) direction
+    s_y = h_px / h_m  # pixels per metric unit in y (height) direction
+
+    S = np.array([[s_x, 0.0, 0.0], [0.0, s_y, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
+
+    # Step 3: Translate to the template pixel origin
+    # This positions the scaled coordinates at the correct pixel location in the template
+    T2 = np.array(
+        [[1.0, 0.0, u0_px], [0.0, 1.0, v0_px], [0.0, 0.0, 1.0]], dtype=np.float64
+    )
+
+    # Combine the metric-to-template-pixel transformation
+    # This chain: metric coords -> centered metric -> scaled to pixels -> positioned in template
+    M_metric_to_template_px = T2 @ S @ T1
+
+    # Step 4: Apply the template-to-scene homography
+    # Final transformation: metric coords -> template pixels -> scene image pixels
+    H_metric = H_px @ M_metric_to_template_px
+
+    # Verify the result is well-conditioned
+    if np.any(~np.isfinite(H_metric)):
+        raise ValueError(
+            "Resulting homography contains non-finite values - check input parameters"
+        )
+
+    return H_metric
+
+
+def derive_metric_homography_old(
+    H_px: np.ndarray,
+    template_size_px: tuple[float, float],
+    template_size_metric: tuple[float, float],
+    template_origin_px: tuple[float, float] = (0.0, 0.0),
+    template_origin_metric: tuple[float, float] = (0.0, 0.0),
+) -> np.ndarray:
+    """
+    Derive a homography that maps real-world template coordinates (in metric units)
+    directly to scene image pixel coordinates, by scaling and translating the
+    given pixel-to-pixel homography.
+    The function is built to also handle different origins in the pixel and metric frames,
+    but in most cases, the origin will be the top-left corner of the template image, and
+    there'll be no need to specify the origins explicitly.
+
+    How it works:
+    1. Translate the metric origign to (0,0) in the metric frame.
+        -> T1 = T(-X0_m, -Y0_m)
+    2. Scale by pixels-per-metric
+        -> S = diag(s_x, s_y, 1) where
+                s_x = width_px/width_m
+                s_y = height_px/height_m
+    3. Translate to the template pixel origin
+        -> T2 = T(u0_px, v0_px)
+    4. Apply the original template-to-image homography
+        -> H_px
+
+    The final mapping is:
+        H_m = H_px @ (T2 @ S @ T1)
+
+    Args:
+        - H_px (np.ndarray): A 3x3 homography matrix mapping template pixel coordinates
+            [u_px, v_px, 1]^T to scene image pixel coordinates [u_img, v_img, 1]^T.
+        - template_size_px (tuple[float, float]): Size of the template image in pixels
+            (height, width).
+        - template_size_metric (tuple[float, float]): Size of the template image in metric
+            units (height, width).
+        - template_origin_px (tuple[float, float], optional): Pixel coordinates in the
+            template image that correspond to the metric origin (default is top-left [0,0]).
+        - template_origin_metric (tuple[float, float], optional): Real-world coordinates
+            (in metric units) that serve as the origin for your metric frame (default is [0,0]).
+
+    Returns:
+        - np.ndarray: A 3x3 homography matrix that maps metric coordinates
+            [X_m, Y_m, 1]^T to image pixel coordinates [u_img, v_img, 1]^T.
+    """
+    # Validate inputs
+    if H_px.shape != (3, 3):
+        raise ValueError(f"Invalid homography shape: {H_px.shape}. Expected (3, 3).")
+    if len(template_size_px) != 2 or len(template_size_metric) != 2:
+        raise ValueError(
+            "template_size_px and template_size_metric must be tuples of length 2."
+        )
+    if len(template_origin_px) != 2 or len(template_origin_metric) != 2:
+        raise ValueError(
+            "template_origin_px and template_origin_metric must be tuples of length 2."
+        )
+
+    # Unpack sizes and origins
+    h_px, w_px = template_size_px
+    h_m, w_m = template_size_metric
+    u0_px, v0_px = template_origin_px
+    X0_m, Y0_m = template_origin_metric
+
+    # Translate metric origin to (0,0)
+    T1 = np.array([[1, 0, -X0_m], [0, 1, -Y0_m], [0, 0, 1]], dtype=float)
+
+    # Scale metric units to template pixels
+    s_x = w_px / w_m
+    s_y = h_px / h_m
+    S = np.array([[s_x, 0, 0], [0, s_y, 0], [0, 0, 1]], dtype=float)
+
+    # Translate to template pixel origin
+    T2 = np.array([[1, 0, u0_px], [0, 1, v0_px], [0, 0, 1]], dtype=float)
+
+    # Combined mapping from metric to template-pixel coords
+    M_m_to_px = T2 @ S @ T1
+
+    # Compose with the given template -> image homography in pixel coordinates
+    H_m = H_px @ M_m_to_px
+
+    return H_m
+
+
+def compute_distance_from_homography(
+    H_mm2img: np.ndarray, K: np.ndarray, point_mm: tuple[float, float]
+) -> float:
+    """
+    Compute the distance from the camera center to a 3D point on the template plane,
+    given the homography from metric coordinates to image pixels and the camera intrinsics.
+
+    Parameters:
+    -----------
+    H_mm2img : np.ndarray, shape (3,3)
+        Homography mapping [X_mm, Y_mm, 1]^T (real-world template coordinates in mm)
+        to [u_px, v_px, 1]^T (image pixel coordinates).
+
+    K : np.ndarray, shape (3,3)
+        Camera intrinsics matrix.
+
+    point_mm : Tuple[float, float]
+        (X_mm, Y_mm) coordinates of the point on the template plane in mm.
+
+    Returns:
+    --------
+    distance : float
+        Euclidean distance from the camera center to the 3D point (in same units as metric homography, e.g., mm).
+    """
+    # Unpack the point
+    X_mm, Y_mm = point_mm
+
+    # 1) Normalize the homography by the intrinsics
+    Hn = np.linalg.inv(K) @ H_mm2img
+
+    # 2) Extract the scale factor (1/d) from the first column norm
+    scale = 1.0 / np.linalg.norm(Hn[:, 0])
+
+    # 3) Extract rotation columns and translation
+    r1 = Hn[:, 0] * scale
+    r2 = Hn[:, 1] * scale
+    t = Hn[:, 2] * scale
+
+    # 4) Compute the 3D point in camera coords: P = X*r1 + Y*r2 + t
+    P = X_mm * r1 + Y_mm * r2 + t
+
+    # 5) Distance is the Euclidean norm of P
+    distance = np.linalg.norm(P)
+    return distance
+
+
 def recover_pose_from_homography_v3(
     H: np.ndarray, K: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray]:

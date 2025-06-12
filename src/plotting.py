@@ -1,6 +1,7 @@
 from typing import Literal
 
 import cv2
+import matplotlib.pyplot as plt
 import numpy as np
 
 from src.enums import Shape
@@ -10,6 +11,23 @@ from src.shapes import (
     octahedron_geometry,
     pyramid_geometry,
 )
+
+
+def visualize_homography(template, image, H, title="Homography Overlay"):
+    """
+    Warp template by H and overlay on image.
+    """
+    h_t, w_t = template.shape[:2]
+    corners = np.float32([[0, 0], [w_t, 0], [w_t, h_t], [0, h_t]]).reshape(-1, 1, 2)
+    warped_corners = cv2.perspectiveTransform(corners, H)
+    overlay = image.copy()
+    pts = np.int32(warped_corners)
+    cv2.polylines(overlay, [pts], True, (255, 0, 0), 3)
+    plt.figure(figsize=(8, 6))
+    plt.imshow(overlay)
+    plt.title(title)
+    plt.axis("off")
+    plt.show()
 
 
 def compute_anchor_point(

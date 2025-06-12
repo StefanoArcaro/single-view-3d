@@ -1,6 +1,86 @@
 import numpy as np
 
 
+def recover_pose_from_homography_v3(
+    H: np.ndarray, K: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    if H.shape != (3, 3) or K.shape != (3, 3):
+        raise ValueError("H and K must both be 3×3 matrices.")
+
+    # Remove camera intrinsics
+    H_norm = np.linalg.inv(K) @ H
+
+    # Divide by Frobenius norm
+    frobenius_norm = np.linalg.norm(H_norm, ord="fro")
+    if frobenius_norm == 0:
+        raise ValueError("Degenerate homography with zero Frobenius norm.")
+    H_norm /= frobenius_norm
+
+    # Extract columns
+    r1 = H_norm[:, 0]
+    r2 = H_norm[:, 1]
+    t = H_norm[:, 2]
+
+    # Orthogonalize r1 and r2 using Gram-Schmidt
+    r1_norm = r1 / np.linalg.norm(r1)
+    r2_ortho = r2 - np.dot(r2, r1_norm) * r1_norm
+    r2_norm = r2_ortho / np.linalg.norm(r2_ortho)
+    r3_norm = np.cross(r1_norm, r2_norm)
+
+    R_approx = np.stack((r1_norm, r2_norm, r3_norm), axis=1)
+
+    # Project onto SO(3) via SVD
+    U, _, Vt = np.linalg.svd(R_approx)
+
+    # Fix reflection by flipping last column of U if needed
+    if np.linalg.det(U @ Vt) < 0:
+        U[:, -1] *= -1
+
+    R = U @ Vt
+
+    return R, t
+
+
+def recover_pose_from_homography_v2(
+    H: np.ndarray, K: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    if H.shape != (3, 3) or K.shape != (3, 3):
+        raise ValueError("H and K must both be 3×3 matrices.")
+
+    # Remove camera intrinsics
+    H_norm = np.linalg.inv(K) @ H
+
+    # Normalize by the first column norm
+    scale = np.linalg.norm(H_norm[:, 0])
+    if scale == 0:
+        raise ValueError("Degenerate homography with zero scale.")
+    H_norm /= scale
+
+    # Extract columns
+    r1 = H_norm[:, 0]
+    r2 = H_norm[:, 1]
+    t = H_norm[:, 2]
+
+    # Orthogonalize r1 and r2 using Gram-Schmidt
+    r1_norm = r1 / np.linalg.norm(r1)
+    r2_ortho = r2 - np.dot(r2, r1_norm) * r1_norm
+    r2_norm = r2_ortho / np.linalg.norm(r2_ortho)
+    r3_norm = np.cross(r1_norm, r2_norm)
+
+    R_approx = np.stack((r1_norm, r2_norm, r3_norm), axis=1)
+
+    # Project onto SO(3) via SVD
+    U, _, Vt = np.linalg.svd(R_approx)
+
+    # Fix reflection by flipping last column of U if needed
+    if np.linalg.det(U @ Vt) < 0:
+        U[:, -1] *= -1
+
+    R = U @ Vt
+
+    return R, t
+
+
 def recover_pose_from_homography(
     H: np.ndarray, K: np.ndarray, normalize_scale: bool = True
 ) -> tuple[np.ndarray, np.ndarray]:

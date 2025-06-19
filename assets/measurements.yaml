@@ -13,6 +13,24 @@ templates:
     width: 50.0
     height: 180.0
 
+  - id: T2
+    label: "PDJ Book"
+    path: "assets/templates/template_02.jpg"
+    width: 185.0
+    height: 242.0
+
+  - id: T3
+    label: "TPP Book"
+    path: "assets/templates/template_03.jpg"
+    width: 187.0
+    height: 232.0
+
+  - id: T4
+    label: "PIC Book"
+    path: "assets/templates/template_04.jpg"
+    width: 167.0
+    height: 240.0
+
 scenes:
   - id: S0
     label: "Frontal Bookmark"
@@ -129,3 +147,55 @@ scenes:
       - from: T0
         to: T1
         distance: 70.0
+
+  - id: S9
+    label: "PDJ Book - Frontal View"
+    path: "assets/images/scene_09.jpg"
+    distances:
+      - from: Camera
+        to: T2
+        distance: 745.0
+
+  - id: S10
+    label: "PDJ Book - Upside Down"
+    path: "assets/images/scene_10.jpg"
+    distances:
+      - from: Camera
+        to: T2
+        distance: 755.0
+  
+  - id: S11
+    label: "PDJ & TPP Books - Frontal View"
+    path: "assets/images/scene_11.jpg"
+    distances:
+      - from: Camera
+        to: T2
+        distance: 665.0
+
+      - from: Camera
+        to: T3
+        distance: 735.0
+
+  - id: S12
+    label: "All books"
+    path: "assets/images/scene_12.jpg"
+    distances:
+      - from: Camera
+        to: T2
+        distance: 705.0
+
+      - from: Camera
+        to: T3
+        distance: 695.0
+
+      - from: Camera
+        to: T4
+        distance: 715.0
+
+  - id: S13
+    label: "PDJ Book - Close Up"
+    path: "assets/images/scene_13.jpg"
+    distances:
+      - from: Camera
+        to: T2
+        distance: 252.0

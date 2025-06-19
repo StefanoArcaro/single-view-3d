@@ -63,21 +63,50 @@ def match_descriptors(desc1, desc2, method="BF", cross_check=True):
 
 def compute_homography(kp1, kp2, matches, ransac_thresh=5.0):
     """
-    Compute homography using matched keypoints.
+    Compute homography using matched keypoints and calculate reprojection error.
 
     Args:
         kp1, kp2: Keypoints from image1 and image2.
         matches: List of cv2.DMatch objects.
         ransac_thresh: RANSAC reprojection threshold.
     Returns:
-        homography matrix H, mask of inliers
+        homography matrix H, mask of inliers, reprojection error (pixels)
     """
     if len(matches) < 4:
         raise ValueError("Not enough matches to compute homography")
+
+    # Extract matched points
     pts1 = np.float32([kp1[m.queryIdx].pt for m in matches])
     pts2 = np.float32([kp2[m.trainIdx].pt for m in matches])
+
+    # Compute homography
     H, mask = cv2.findHomography(pts1, pts2, cv2.RANSAC, ransac_thresh)
-    return H, mask
+
+    # Compute reprojection error
+    if H is not None:
+        # Transform pts1 using homography
+        pts1_homogeneous = np.column_stack([pts1, np.ones(len(pts1))])
+        transformed_pts = (H @ pts1_homogeneous.T).T
+
+        # Convert back from homogeneous coordinates
+        transformed_pts = transformed_pts[:, :2] / transformed_pts[:, 2:3]
+
+        # Compute Euclidean distances for all points
+        errors = np.linalg.norm(transformed_pts - pts2, axis=1)
+
+        # Calculate mean error for inliers only
+        if mask is not None:
+            inlier_mask = mask.ravel().astype(bool)
+            inlier_errors = errors[inlier_mask]
+            reprojection_error = (
+                np.mean(inlier_errors) if len(inlier_errors) > 0 else float("inf")
+            )
+        else:
+            reprojection_error = np.mean(errors)
+    else:
+        reprojection_error = float("inf")
+
+    return H, mask, reprojection_error
 
 
 def template_match(
@@ -88,7 +117,7 @@ def template_match(
     kp_t, desc_t = extract_features(tpl, method=extract_method)
     kp_i, desc_i = extract_features(img, method=extract_method)
     matches = match_descriptors(desc_t, desc_i, method=match_method)
-    H, mask = compute_homography(kp_t, kp_i, matches)
+    H, mask, reprojection_error = compute_homography(kp_t, kp_i, matches)
     if plot:
         visualize_homography(tpl, img, H, title="Template Matching Result")
-    return H, mask, tpl.shape[:2]
+    return H, mask, tpl.shape[:2], reprojection_error

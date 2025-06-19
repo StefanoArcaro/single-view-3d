@@ -12,6 +12,7 @@ dependencies = [
     "pydantic>=2.11.4",
     "pyvista>=0.45.2",
     "pyyaml>=6.0.2",
+    "seaborn>=0.13.2",
 ]
 
 [dependency-groups]

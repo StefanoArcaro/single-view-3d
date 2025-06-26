@@ -3,3 +3,6 @@
 - `measurements_v3.ipynb` is the new one
 - `calibration.ipynb` is for calibrating the camera
 - `plane_normal.ipynb` tests the computation of the normal to the image template plane given the homography
+
+## Start server
+- fuser -k 8000/tcp || true && python -m http.server 8000

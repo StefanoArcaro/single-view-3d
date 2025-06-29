@@ -1,6 +1,78 @@
 import numpy as np
 
 
+def recover_all_poses_from_homography(H: np.ndarray, K: np.ndarray) -> list:
+    """
+    Recover all 4 possible poses from homography decomposition.
+    Returns list of (R, t, n) tuples where n is the plane normal.
+    """
+    # Remove camera intrinsics
+    H_norm = np.linalg.inv(K) @ H
+
+    # Extract and normalize
+    r1 = H_norm[:, 0]
+    r2 = H_norm[:, 1]
+    t = H_norm[:, 2]
+
+    # Two possible normalizations (+ and -)
+    scale = np.linalg.norm(r1)
+
+    solutions = []
+
+    for sign in [1, -1]:
+        r1_scaled = sign * r1 / scale
+        r2_scaled = sign * r2 / scale
+        t_scaled = sign * t / scale
+
+        # Orthogonalize
+        # r2_ortho = r2_scaled - np.dot(r2_scaled, r1_scaled) * r1_scaled
+        # r2_ortho /= np.linalg.norm(r2_ortho)
+        r3 = np.cross(r1_scaled, r2_scaled)
+
+        # Build rotation matrix
+        R_approx = np.column_stack((r1_scaled, r2_scaled, r3))
+
+        # Project to SO(3)
+        U, _, Vt = np.linalg.svd(R_approx)
+        if np.linalg.det(U @ Vt) < 0:
+            U[:, -1] *= -1
+        R = U @ Vt
+
+        # Compute plane normal (third row of R)
+        n = R[2, :]
+
+        solutions.append((R, t_scaled, n))
+
+        # Also add the solution with flipped normal
+        solutions.append((R, t_scaled, -n))
+
+    return solutions
+
+
+def select_best_solution(solutions: list, expected_z_positive=True) -> tuple:
+    """
+    Select the most reasonable solution based on constraints.
+    For a template in front of camera, we expect positive Z and small X,Y.
+    """
+    best_solution = None
+    best_score = float("inf")
+
+    for R, t, n in solutions:
+        # Score based on:
+        # 1. Z should be positive and dominant
+        # 2. X, Y should be small relative to Z
+        if expected_z_positive and t[2] <= 0:
+            continue
+
+        score = (abs(t[0]) + abs(t[1])) / abs(t[2])  # Want this to be small
+
+        if score < best_score:
+            best_score = score
+            best_solution = (R, t, n)
+
+    return best_solution
+
+
 def derive_metric_homography(
     H_px: np.ndarray,
     template_size_px: tuple[float, float],

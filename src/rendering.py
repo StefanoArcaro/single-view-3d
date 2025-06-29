@@ -1,81 +1,162 @@
-from typing import List, Tuple
+from typing import Any
 
+import cv2
+import matplotlib.pyplot as plt
 import numpy as np
-import pyvista as pv
-from scipy.spatial.transform import Rotation
+from mpl_toolkits.mplot3d import Axes3D
+
+from src.geometry import recover_all_poses_from_homography, select_best_solution
 
 
-def plot_quads_from_camera(
-    quad_poses: List[Tuple[np.ndarray, np.ndarray]],
-    quad_size: float = 1.0,
-    show_axes: bool = True,
-    show_camera: bool = True,
-):
+class MultiTemplateVisualizer:
     """
-    Render a 3D scene showing quads at specified poses relative to a camera at the origin.
-
-    Parameters:
-        quad_poses: List of (R, t) tuples, where
-                    R is a 3x3 rotation matrix,
-                    t is a 3-element translation vector (quad center in camera frame).
-        quad_size: Side length of the square quad.
-        show_axes: Whether to show 3D axes at the origin.
-        show_camera: Whether to show a sphere at the camera origin.
+    Visualize multiple 3D templates in camera coordinates and their 2D projections
+    on the image plane using shared camera intrinsics.
     """
-    plotter = pv.Plotter()
-    plotter.set_background("gray")
 
-    # Create a base quad (square in XY plane, normal along Z)
-    base_quad = pv.Plane(
-        center=(0, 0, 0), direction=(0, 0, 1), i_size=quad_size, j_size=quad_size
-    )
+    def __init__(
+        self,
+        metadata: dict[str, Any],
+        results: dict[str, Any],
+        K: np.ndarray,
+        fig_size: tuple[int, int] = (14, 6),
+        view_elev: float = 30,
+        view_azim: float = 140,
+    ) -> None:
+        """
+        Args:
+            metadata (dict[str, Template]): Mapping from template ID to Template object
+                with attributes `width` and `height` defining the template size.
+            results (dict[str, Any]): Mapping from template ID to a dict containing
+                at least the key `'homography'` with a 3x3 homography matrix.
+            K (np.ndarray): 3x3 camera intrinsic matrix.
+            fig_size (tuple[int, int], optional): Size of the matplotlib figure.
+            view_elev (float, optional): Elevation angle for 3D view.
+            view_azim (float, optional): Azimuth angle for 3D view.
+        """
+        self.metadata = metadata
+        self.results = results
+        self.K = K
+        self.fig_size = fig_size
+        self.view_elev = view_elev
+        self.view_azim = view_azim
 
-    # Transform and add each quad
-    for i, (R, t) in enumerate(quad_poses):
-        print(f"Quad {i + 1}: R = {R}, t = {t}")
-        transform = np.eye(4)
-        transform[:3, :3] = R
-        transform[:3, 3] = t
-        quad = base_quad.copy()
-        quad.transform(transform, inplace=True)
-        plotter.add_mesh(quad, color="skyblue", opacity=0.7, label=f"Quad {i + 1}")
+    def _project_to_image(self, points_cam: np.ndarray) -> np.ndarray:
+        """
+        Project 3D camera-frame points into 2D image points using intrinsics.
 
-    # Show the camera center
-    if show_camera:
-        plotter.add_mesh(
-            pv.Sphere(radius=0.1, center=(0, 0, 0)), color="red", label="Camera"
-        )
+        Args:
+            points_cam (np.ndarray): Array of shape (N, 3).
 
-    if show_axes:
-        plotter.add_axes()
+        Returns:
+            np.ndarray: Array of shape (N, 2) with pixel coordinates.
+        """
+        rvec = np.zeros((3, 1), dtype=np.float32)
+        tvec = np.zeros((3, 1), dtype=np.float32)
+        img_pts, _ = cv2.projectPoints(points_cam, rvec, tvec, self.K, None)
+        return img_pts.reshape(-1, 2)
 
-    plotter.show()
+    def _set_equal_axes(self, ax: Axes3D, points: np.ndarray) -> None:
+        """
+        Force equal scaling on a 3D Axes.
 
+        Args:
+            ax (Axes3D): The 3D axes to adjust.
+            points (np.ndarray): Array of shape (M, 3) of all points to frame.
+        """
+        mins = points.min(axis=0)
+        maxs = points.max(axis=0)
+        spans = maxs - mins
+        mid = (maxs + mins) / 2
+        half_range = spans.max() / 2
+        ax.set_xlim(mid[0] - half_range, mid[0] + half_range)
+        ax.set_ylim(mid[1] - half_range, mid[1] + half_range)
+        ax.set_zlim(mid[2] - half_range, mid[2] + half_range)
 
-def demo_quads():
-    quad_poses = []
+    def plot(self) -> None:
+        """
+        Plot all templates in a single 3D axes and their 2D projections side by side.
+        """
+        num_templates = len(self.metadata)
+        colors = plt.cm.tab10(np.linspace(0, 1, num_templates))
 
-    # Quad 1: Straight ahead, 3 units forward
-    R1 = np.eye(3)
-    t1 = np.array([0, 0, 3])
-    quad_poses.append((R1, t1))
+        fig = plt.figure(figsize=self.fig_size)
+        ax3d = fig.add_subplot(121, projection="3d")
+        ax2d = fig.add_subplot(122)
 
-    # Quad 2: Tilted 30 deg around Y, translated to the right
-    R2 = Rotation.from_euler("y", 30, degrees=True).as_matrix()
-    t2 = np.array([2, 0, 4])
-    quad_poses.append((R2, t2))
+        all_3d_points = []  # For equalizing axes
 
-    # Quad 3: Rotated 45 deg around X, above the camera
-    R3 = Rotation.from_euler("x", 45, degrees=True).as_matrix()
-    t3 = np.array([0, 2, 5])
-    quad_poses.append((R3, t3))
+        for idx, (t_id, template) in enumerate(self.metadata.items()):
+            # Homography decomposition
+            H = np.array(self.results[t_id]["homography"], dtype=np.float64)
+            solutions = recover_all_poses_from_homography(H, self.K)
+            R, t, _ = select_best_solution(solutions, expected_z_positive=True)
 
-    # Quad 4: Combined X and Y rotation
-    R4 = Rotation.from_euler("xy", [30, 15], degrees=True).as_matrix()
-    t4 = np.array([-2, -1, 4])
-    quad_poses.append((R4, t4))
+            # Build template corners in world frame
+            w, h = template.width, template.height
+            corners_world = np.array(
+                [[0, 0, 0], [w, 0, 0], [w, h, 0], [0, h, 0]], dtype=np.float32
+            )
 
-    plot_quads_from_camera(quad_poses, quad_size=1.5)
+            # Transform to camera frame
+            pts_cam = (R @ corners_world.T).T + t.reshape(1, 3)
+            all_3d_points.append(pts_cam)
 
+            # Project to image plane
+            img_pts = self._project_to_image(pts_cam)
 
-# demo_quads()
+            # Plot 3D edges
+            col = colors[idx]
+            for i, j in [(0, 1), (1, 2), (2, 3), (3, 0)]:
+                xs, ys, zs = zip(pts_cam[i], pts_cam[j])
+                ax3d.plot(xs, ys, zs, color=col)
+
+            # Plot 2D edges
+            for i, j in [(0, 1), (1, 2), (2, 3), (3, 0)]:
+                ax2d.plot(
+                    [img_pts[i, 0], img_pts[j, 0]],
+                    [img_pts[i, 1], img_pts[j, 1]],
+                    marker="o",
+                    color=col,
+                    label=t_id if i == 0 else None,
+                )
+
+        # Finalize 3D plot
+        all_3d = np.vstack(all_3d_points)
+        self._set_equal_axes(ax3d, all_3d)
+        ax3d.scatter([0], [0], [0], color="black", s=50, label="Camera")
+
+        # Draw camera axes (in camera frame)
+        # scale length to, say, 10% of the overall scene span:
+        L = (all_3d.max() - all_3d.min()) * 0.1
+        basis = np.eye(3) * L
+        for vec, col, lab in zip(basis, ["r", "g", "b"], ["X_cam", "Y_cam", "Z_cam"]):
+            ax3d.quiver(
+                0,
+                0,
+                0,  # origin
+                *vec,  # direction
+                color=col,
+                arrow_length_ratio=0.1,
+                label=lab,
+            )
+
+        ax3d.set_xlabel("X")
+        ax3d.set_ylabel("Y")
+        ax3d.set_zlabel("Z")
+        ax3d.view_init(elev=self.view_elev, azim=self.view_azim)
+        ax3d.legend()
+        ax3d.set_title("3D View (all templates)")
+
+        # Finalize 2D plot
+        ax2d.set_aspect("equal")
+        ax2d.set_xlim(0, self.K[0, 2] * 2)
+        ax2d.set_ylim(self.K[1, 2] * 2, 0)
+        ax2d.set_xlabel("X (px)")
+        ax2d.set_ylabel("Y (px)")
+        ax2d.grid()
+        ax2d.set_title("2D Projection (all templates)")
+        ax2d.legend(loc="upper right")
+
+        plt.tight_layout()
+        plt.show()

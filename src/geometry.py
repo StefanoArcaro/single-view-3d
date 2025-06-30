@@ -1,71 +1,199 @@
+"""
+Homography-based Pose Estimation and Metric Transformation Module
+
+This module provides functions for recovering camera poses from homography matrices,
+selecting optimal pose solutions, and converting between pixel and metric coordinate
+systems for computer vision applications.
+
+Key Functionality:
+- Decompose homography matrices to recover camera poses
+- Select the most plausible pose from multiple solutions
+- Convert pixel-based homographies to metric coordinate mappings
+- Compute 3D distances using homography and camera intrinsics
+
+Mathematical Background:
+Homography decomposition assumes a planar scene and can yield up to 4 possible
+camera poses. This module implements a method to disambiguate these solutions
+and work with real-world metric measurements.
+
+Dependencies:
+    - numpy: For matrix operations and numerical computations
+"""
+
 import numpy as np
+from numpy.typing import NDArray
+
+# Type aliases for improved readability
+Matrix3x3 = NDArray[np.float64]
+Vector3D = NDArray[np.float64]
+Point2D = tuple[float, float]
+RotationMatrix = NDArray[np.float64]
+TranslationVector = NDArray[np.float64]
+PlaneNormal = NDArray[np.float64]
+PoseSolution = tuple[RotationMatrix, TranslationVector, PlaneNormal]
 
 
-def recover_all_poses_from_homography(H: np.ndarray, K: np.ndarray) -> list:
+def recover_all_poses_from_homography(H: Matrix3x3, K: Matrix3x3) -> list[PoseSolution]:
     """
-    Recover all 4 possible poses from homography decomposition.
-    Returns list of (R, t, n) tuples where n is the plane normal.
+    Recover all 4 possible camera poses from homography decomposition.
+
+    This function implements the classical homography decomposition algorithm
+    that assumes the scene lies on a plane. The decomposition yields multiple
+    possible solutions due to the ambiguity inherent in homography matrices.
+
+    Mathematical Approach:
+    1. Normalize homography by removing camera intrinsics: H_norm = K^(-1) * H
+    2. Extract rotation columns and translation from normalized homography
+    3. Apply scale normalization using the norm of the first rotation column
+    TODO check if it's better to use a mean of the norms of the first two columns
+    4. Generate all possible sign combinations for the ambiguous solutions
+    5. Project approximate rotation matrices to the SO(3) manifold using SVD
+
+    Args:
+        H: 3x3 homography matrix mapping points from a reference plane to image pixels.
+            Should be well-conditioned and invertible.
+        K: 3x3 camera intrinsics matrix containing focal lengths and principal point.
+            Must be invertible (det(K) ≠ 0).
+
+    Returns:
+        List of 4 pose solutions, each represented as a tuple (R, t, n) where:
+            - R: 3x3 rotation matrix (orthogonal, det(R) = 1)
+            - t: 3D translation vector from camera center to plane origin
+            - n: 3D unit normal vector of the reference plane
+
+    Note:
+        The returned poses represent the transformation from the reference plane
+        coordinate system to the camera coordinate system. Multiple solutions
+        arise from sign ambiguities in the decomposition process.
     """
-    # Remove camera intrinsics
-    H_norm = np.linalg.inv(K) @ H
+    # 1. Remove camera intrinsics to get normalized homography
+    # This transforms the homography from pixel coordinates to normalized camera coordinates
+    H_norm: Matrix3x3 = np.linalg.inv(K) @ H
 
-    # Extract and normalize
-    r1 = H_norm[:, 0]
-    r2 = H_norm[:, 1]
-    t = H_norm[:, 2]
+    # 2. Extract rotation columns and translation vector from normalized homography
+    # In the homography decomposition, H_norm = [r1, r2, t] * scale_factor
+    r1: Vector3D = H_norm[:, 0]  # First rotation column
+    r2: Vector3D = H_norm[:, 1]  # Second rotation column
+    t: Vector3D = H_norm[:, 2]  # Translation vector
 
-    # Two possible normalizations (+ and -)
-    scale = np.linalg.norm(r1)
+    # 3. Compute scale factor from the constraint that rotation columns are unit vectors
+    # The scale factor normalizes the decomposition
+    scale: float = np.linalg.norm(r1)
 
-    solutions = []
+    # 4. Generate solutions
+    solutions: list[PoseSolution] = []
 
+    # The homography decomposition has an inherent sign ambiguity
     for sign in [1, -1]:
-        r1_scaled = sign * r1 / scale
-        r2_scaled = sign * r2 / scale
-        t_scaled = sign * t / scale
+        # Apply sign and scale normalization
+        r1_scaled: Vector3D = sign * r1 / scale
+        r2_scaled: Vector3D = sign * r2 / scale
+        t_scaled: Vector3D = sign * t / scale
 
-        # Orthogonalize
-        # r2_ortho = r2_scaled - np.dot(r2_scaled, r1_scaled) * r1_scaled
-        # r2_ortho /= np.linalg.norm(r2_ortho)
-        r3 = np.cross(r1_scaled, r2_scaled)
+        # Compute third rotation column using cross product
+        # For a valid rotation matrix, r3 = r1 × r2 (right-hand rule)
+        r3: Vector3D = np.cross(r1_scaled, r2_scaled)
 
-        # Build rotation matrix
-        R_approx = np.column_stack((r1_scaled, r2_scaled, r3))
+        # Construct approximate rotation matrix
+        R_approx: Matrix3x3 = np.column_stack((r1_scaled, r2_scaled, r3))
 
-        # Project to SO(3)
+        # 5. Project to SO(3) using SVD to ensure orthogonality
+        # This corrects for numerical errors and enforces rotation matrix constraints
+        U: Matrix3x3
+        Vt: Matrix3x3
         U, _, Vt = np.linalg.svd(R_approx)
+
+        # Ensure proper rotation (det(R) = +1, if -1 it's a reflection)
         if np.linalg.det(U @ Vt) < 0:
+            # Flip the last column of U to ensure det(R) = +1
             U[:, -1] *= -1
-        R = U @ Vt
 
-        # Compute plane normal (third row of R)
-        n = R[2, :]
+        # Final rotation matrix
+        R: RotationMatrix = U @ Vt
 
+        # Compute plane normal vector as the third row of the rotation matrix
+        # This holds because the original plane normal (before rotation) is the z-axis unit vector
+        n: PlaneNormal = R[2, :]
+
+        # Add both normal orientations to account for plane normal ambiguity
         solutions.append((R, t_scaled, n))
-
-        # Also add the solution with flipped normal
         solutions.append((R, t_scaled, -n))
 
     return solutions
 
 
-def select_best_solution(solutions: list, expected_z_positive=True) -> tuple:
+def select_best_solution(
+    solutions: list[PoseSolution], expected_z_positive: bool = True
+) -> PoseSolution | None:
     """
-    Select the most reasonable solution based on constraints.
-    For a template in front of camera, we expect positive Z and small X,Y.
-    """
-    best_solution = None
-    best_score = float("inf")
+    Select the most geometrically plausible pose solution from multiple candidates.
 
+    This function applies geometric constraints and heuristics to disambiguate
+    between the multiple pose solutions returned by homography decomposition.
+    The selection criteria favor solutions that represent realistic camera-object
+    configurations.
+
+    Selection Criteria:
+    1. Z-coordinate constraint: Ensures the plane is in front of the camera
+    2. Numerical stability: Avoids solutions with very small Z values
+    3. Viewing angle heuristic: Prefers head-on views over oblique angles
+    4. Normal orientation: Considers plane normal direction relative to camera
+
+    Args:
+        solutions: List of pose candidates from homography decomposition.
+                Each solution is a tuple (R, t, n) representing rotation,
+                translation, and plane normal respectively.
+        expected_z_positive: Whether to enforce positive Z translation (plane in front
+                            of camera). Set to False for scenarios where the plane
+                            might be behind the camera.
+
+    Returns:
+        The best pose solution as a tuple (R, t, n), or None if no valid
+        solution is found according to the constraints.
+
+    Note:
+        The scoring function penalizes solutions where:
+        - The plane is very far from the camera optical axis (large X, Y relative to Z)
+        - The plane normal points away from the camera (backfacing plane)
+        - The translation has very small Z component (numerical instability)
+
+    Example:
+        >>> poses = recover_all_poses_from_homography(H, K)
+        >>> best_pose = select_best_solution(poses, expected_z_positive=True)
+        >>> if best_pose is not None:
+        ...     R, t, n = best_pose
+        ...     print(f"Selected pose with translation: {t}")
+    """
+    # Handle empty solution list
+    if not solutions:
+        return None
+
+    best_solution: PoseSolution | None = None
+    best_score: float = float("inf")
+
+    # Evaluate each candidate solution
     for R, t, n in solutions:
-        # Score based on:
-        # 1. Z should be positive and dominant
-        # 2. X, Y should be small relative to Z
+        # Constraint 1: Check Z-coordinate sign if required
         if expected_z_positive and t[2] <= 0:
+            # Skip solutions where the plane is behind the camera
             continue
 
-        score = (abs(t[0]) + abs(t[1])) / abs(t[2])  # Want this to be small
+        # Constraint 2: Avoid numerical instability from very small Z values
+        if abs(t[2]) < 1e-8:
+            # Skip solutions that might cause division by zero issues
+            continue
 
+        # Scoring heuristic: Prefer solutions with small lateral displacement
+        # This favors head-on views over oblique viewing angles
+        # Score represents the ratio of lateral displacement to depth
+        score: float = (abs(t[0]) + abs(t[1])) / abs(t[2])
+
+        # Additional penalty for backfacing plane normals
+        if n[2] > 0:  # Normal pointing away from camera (towards positive Z)
+            # Double the score to penalize this configuration
+            score *= 2
+
+        # Update best solution if current score is better
         if score < best_score:
             best_score = score
             best_solution = (R, t, n)
@@ -74,68 +202,84 @@ def select_best_solution(solutions: list, expected_z_positive=True) -> tuple:
 
 
 def derive_metric_homography(
-    H_px: np.ndarray,
+    H_px: Matrix3x3,
     template_size_px: tuple[float, float],
     template_size_metric: tuple[float, float],
-    template_origin_px: tuple[float, float] = (0.0, 0.0),
-    template_origin_metric: tuple[float, float] = (0.0, 0.0),
-) -> np.ndarray:
+    template_origin_px: Point2D = (0.0, 0.0),
+    template_origin_metric: Point2D = (0.0, 0.0),
+) -> Matrix3x3:
     """
-    Derive a homography that maps real-world template coordinates (in metric units)
-    directly to scene image pixel coordinates.
+    Derive a homography matrix that maps real-world metric coordinates to image pixels.
 
-    This function combines a pixel-to-pixel homography with scaling and translation
-    transformations to enable direct mapping from metric coordinates to image pixels.
+    This function creates a composite transformation that enables direct mapping from
+    metric coordinates on a template to pixel coordinates in a scene image. It combines
+    coordinate system transformations with an existing pixel-to-pixel homography.
 
     Coordinate System Conventions:
-    - template_size_px: (height, width) in pixels (following image shape convention)
-    - template_size_metric: (height, width) in metric units
-    - Origins (both pixel and metric): (x, y) coordinates (following OpenCV point convention)
-      where x corresponds to width/column direction, y to height/row direction
+    - template_size_px: (height, width) in pixels (follows image shape convention)
+    - template_size_metric: (height, width) in metric units (same convention)
+    - Origins: (x, y) coordinates following OpenCV point convention where:
+      * x corresponds to the width/column direction (horizontal)
+      * y corresponds to the height/row direction (vertical)
 
-    Mathematical Pipeline:
-    The transformation chain converts metric coordinates to image pixels through:
-    1. Translate metric origin to (0,0): T1 = translate(-X0_m, -Y0_m)
-    2. Scale metric units to pixels: S = scale(width_px/width_m, height_px/height_m)
-    3. Translate to template pixel origin: T2 = translate(u0_px, v0_px)
-    4. Apply template-to-image homography: H_px
+    Transformation Pipeline:
+    The complete transformation chain applies these operations in sequence:
+    1. T1: Translate metric origin to (0,0) -> T1 = translate(-X0_m, -Y0_m)
+    2. S:  Scale metric units to pixels -> S = scale(width_px/width_m, height_px/height_m)
+    3. T2: Translate to template pixel origin -> T2 = translate(u0_px, v0_px)
+    4. H_px: Apply template-to-scene homography
 
-    Final mapping: H_metric = H_px @ T2 @ S @ T1
+    Mathematical Formula:
+    H_metric = H_px @ T2 @ S @ T1
 
     Args:
-        H_px (np.ndarray): 3x3 homography matrix mapping template pixel coordinates
-            [u_px, v_px, 1]^T to scene image pixel coordinates [u_img, v_img, 1]^T.
-        template_size_px (tuple[float, float]): Template dimensions in pixels as
-            (height, width). Must be positive values.
-        template_size_metric (tuple[float, float]): Template dimensions in metric
-            units as (height, width). Must be positive values.
-        template_origin_px (tuple[float, float], optional): Pixel coordinates (x, y)
-            in the template image corresponding to the metric origin. Defaults to (0, 0)
-            which is the top-left corner.
-        template_origin_metric (tuple[float, float], optional): Real-world coordinates
-            (x, y) in metric units that serve as the origin. Defaults to (0, 0).
+        H_px: 3x3 homography matrix mapping template pixel coordinates [u_px, v_px, 1]^T
+            to scene image pixel coordinates [u_img, v_img, 1]^T.
+        template_size_px: Template dimensions in pixels as (height, width).
+                        Both values must be positive.
+        template_size_metric: Template dimensions in metric units as (height, width).
+                            Both values must be positive and in the same units.
+        template_origin_px: Pixel coordinates (x, y) in the template image that
+                            correspond to the metric coordinate origin. Default (0, 0)
+                            represents the top-left corner.
+        template_origin_metric: Real-world coordinates (x, y) in metric units that
+                                define the origin of the metric coordinate system.
+                                Default (0, 0) uses the template's reference point.
 
     Returns:
-        np.ndarray: 3x3 homography matrix mapping metric coordinates [X_m, Y_m, 1]^T
-            to scene image pixel coordinates [u_img, v_img, 1]^T.
+        3x3 homography matrix that maps metric coordinates [X_m, Y_m, 1]^T directly
+        to scene image pixel coordinates [u_img, v_img, 1]^T.
 
     Raises:
-        ValueError: If input dimensions are invalid or homography shape is incorrect.
+        ValueError: If any of the following conditions are met:
+            - H_px is not a 3x3 numpy array
+            - Template dimensions are not positive
+            - Input tuples have incorrect length
+            - Homography contains non-finite values
+            - Resulting homography is ill-conditioned
 
     Example:
-        >>> # Template: 100x200 pixels, represents 0.5x1.0 meters
-        >>> H_px = np.eye(3)  # Identity homography for this example
-        >>> template_size_px = (100, 200)      # (height, width) in pixels
-        >>> template_size_metric = (0.5, 1.0)  # (height, width) in meters
+        Transform a 100×200 pixel template representing a 0.5×1.0 meter object:
+
+        >>> H_px = np.eye(3)  # Identity transformation for demonstration
+        >>> template_size_px = (100, 200)      # 100 pixels high, 200 pixels wide
+        >>> template_size_metric = (0.5, 1.0)  # 0.5 meters high, 1.0 meters wide
+        >>>
+        >>> # Create metric homography
         >>> H_metric = derive_metric_homography(H_px, template_size_px, template_size_metric)
-        >>> # Now H_metric maps (X_meters, Y_meters, 1) -> (u_pixels, v_pixels, 1)
+        >>>
+        >>> # Map a point 0.25 meters from origin to image coordinates
+        >>> metric_point = np.array([0.25, 0.1, 1.0])  # [X_meters, Y_meters, 1]
+        >>> image_point = H_metric @ metric_point        # [u_pixels, v_pixels, w]
+        >>> image_coords = image_point[:2] / image_point[2]  # Normalize homogeneous coords
     """
-    # Input validation
+    # Input validation: Check homography matrix format
     if not isinstance(H_px, np.ndarray) or H_px.shape != (3, 3):
         raise ValueError(
             f"H_px must be a 3x3 numpy array, got shape: {getattr(H_px, 'shape', 'not an array')}"
         )
 
+    # Input validation: Check tuple lengths
     if len(template_size_px) != 2 or len(template_size_metric) != 2:
         raise ValueError(
             "template_size_px and template_size_metric must be tuples of length 2"
@@ -146,10 +290,11 @@ def derive_metric_homography(
             "template_origin_px and template_origin_metric must be tuples of length 2"
         )
 
-    # Validate that dimensions are positive
-    h_px, w_px = template_size_px
-    h_m, w_m = template_size_metric
+    # Extract and validate template dimensions
+    h_px, w_px = template_size_px  # Height and width in pixels
+    h_m, w_m = template_size_metric  # Height and width in metric units
 
+    # Input validation: Ensure positive dimensions
     if h_px <= 0 or w_px <= 0:
         raise ValueError(
             f"Template pixel dimensions must be positive, got: height={h_px}, width={w_px}"
@@ -160,599 +305,117 @@ def derive_metric_homography(
             f"Template metric dimensions must be positive, got: height={h_m}, width={w_m}"
         )
 
-    # Check for numerical validity of the input homography
+    # Input validation: Check for numerical validity
     if np.any(~np.isfinite(H_px)):
         raise ValueError("H_px contains non-finite values (NaN or inf)")
 
-    # Extract origin coordinates (using x, y convention for points)
-    u0_px, v0_px = template_origin_px  # x, y in pixel coordinates
-    X0_m, Y0_m = template_origin_metric  # x, y in metric coordinates
+    # Extract origin coordinates using OpenCV point convention (x, y)
+    u0_px, v0_px = template_origin_px  # Pixel coordinates (x, y)
+    X0_m, Y0_m = template_origin_metric  # Metric coordinates (x, y)
 
-    # Step 1: Translate metric origin to (0,0) in metric coordinate system
-    # This moves the metric coordinate frame so that template_origin_metric becomes (0,0)
-    T1 = np.array(
+    # Transformation Step 1: Translate metric origin to (0,0)
+    # This translation moves the metric coordinate system so that the specified
+    # origin point becomes the new (0,0) reference
+    T1: Matrix3x3 = np.array(
         [[1.0, 0.0, -X0_m], [0.0, 1.0, -Y0_m], [0.0, 0.0, 1.0]], dtype=np.float64
     )
 
-    # Step 2: Scale from metric units to template pixel units
-    # Scale factors convert metric dimensions to pixel dimensions
-    s_x = w_px / w_m  # pixels per metric unit in x (width) direction
-    s_y = h_px / h_m  # pixels per metric unit in y (height) direction
+    # Transformation Step 2: Scale from metric units to template pixel units
+    # Calculate scale factors to convert metric dimensions to pixel dimensions
+    s_x: float = w_px / w_m  # Scale factor in x-direction (pixels per metric unit)
+    s_y: float = h_px / h_m  # Scale factor in y-direction (pixels per metric unit)
 
-    S = np.array([[s_x, 0.0, 0.0], [0.0, s_y, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
+    S: Matrix3x3 = np.array(
+        [[s_x, 0.0, 0.0], [0.0, s_y, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64
+    )
 
-    # Step 3: Translate to the template pixel origin
-    # This positions the scaled coordinates at the correct pixel location in the template
-    T2 = np.array(
+    # Transformation Step 3: Translate to the template pixel origin
+    # This positions the scaled coordinates at the correct pixel location within
+    # the template image coordinate system
+    T2: Matrix3x3 = np.array(
         [[1.0, 0.0, u0_px], [0.0, 1.0, v0_px], [0.0, 0.0, 1.0]], dtype=np.float64
     )
 
-    # Combine the metric-to-template-pixel transformation
-    # This chain: metric coords -> centered metric -> scaled to pixels -> positioned in template
-    M_metric_to_template_px = T2 @ S @ T1
+    # Combine metric-to-template-pixel transformations
+    # This composite transformation chains: metric coords -> centered metric ->
+    # scaled to pixels -> positioned in template pixel coordinates
+    M_metric_to_template_px: Matrix3x3 = T2 @ S @ T1
 
-    # Step 4: Apply the template-to-scene homography
+    # Transformation Step 4: Apply template-to-scene homography
     # Final transformation: metric coords -> template pixels -> scene image pixels
-    H_metric = H_px @ M_metric_to_template_px
+    H_metric: Matrix3x3 = H_px @ M_metric_to_template_px
 
-    # Verify the result is well-conditioned
+    # Output validation: Verify the result is numerically well-conditioned
     if np.any(~np.isfinite(H_metric)):
         raise ValueError(
-            "Resulting homography contains non-finite values - check input parameters"
+            "Resulting homography contains non-finite values - check input parameters for "
+            "numerical issues or extreme scale factors"
         )
 
     return H_metric
 
 
-def derive_metric_homography_old(
-    H_px: np.ndarray,
-    template_size_px: tuple[float, float],
-    template_size_metric: tuple[float, float],
-    template_origin_px: tuple[float, float] = (0.0, 0.0),
-    template_origin_metric: tuple[float, float] = (0.0, 0.0),
-) -> np.ndarray:
-    """
-    Derive a homography that maps real-world template coordinates (in metric units)
-    directly to scene image pixel coordinates, by scaling and translating the
-    given pixel-to-pixel homography.
-    The function is built to also handle different origins in the pixel and metric frames,
-    but in most cases, the origin will be the top-left corner of the template image, and
-    there'll be no need to specify the origins explicitly.
-
-    How it works:
-    1. Translate the metric origign to (0,0) in the metric frame.
-        -> T1 = T(-X0_m, -Y0_m)
-    2. Scale by pixels-per-metric
-        -> S = diag(s_x, s_y, 1) where
-                s_x = width_px/width_m
-                s_y = height_px/height_m
-    3. Translate to the template pixel origin
-        -> T2 = T(u0_px, v0_px)
-    4. Apply the original template-to-image homography
-        -> H_px
-
-    The final mapping is:
-        H_m = H_px @ (T2 @ S @ T1)
-
-    Args:
-        - H_px (np.ndarray): A 3x3 homography matrix mapping template pixel coordinates
-            [u_px, v_px, 1]^T to scene image pixel coordinates [u_img, v_img, 1]^T.
-        - template_size_px (tuple[float, float]): Size of the template image in pixels
-            (height, width).
-        - template_size_metric (tuple[float, float]): Size of the template image in metric
-            units (height, width).
-        - template_origin_px (tuple[float, float], optional): Pixel coordinates in the
-            template image that correspond to the metric origin (default is top-left [0,0]).
-        - template_origin_metric (tuple[float, float], optional): Real-world coordinates
-            (in metric units) that serve as the origin for your metric frame (default is [0,0]).
-
-    Returns:
-        - np.ndarray: A 3x3 homography matrix that maps metric coordinates
-            [X_m, Y_m, 1]^T to image pixel coordinates [u_img, v_img, 1]^T.
-    """
-    # Validate inputs
-    if H_px.shape != (3, 3):
-        raise ValueError(f"Invalid homography shape: {H_px.shape}. Expected (3, 3).")
-    if len(template_size_px) != 2 or len(template_size_metric) != 2:
-        raise ValueError(
-            "template_size_px and template_size_metric must be tuples of length 2."
-        )
-    if len(template_origin_px) != 2 or len(template_origin_metric) != 2:
-        raise ValueError(
-            "template_origin_px and template_origin_metric must be tuples of length 2."
-        )
-
-    # Unpack sizes and origins
-    h_px, w_px = template_size_px
-    h_m, w_m = template_size_metric
-    u0_px, v0_px = template_origin_px
-    X0_m, Y0_m = template_origin_metric
-
-    # Translate metric origin to (0,0)
-    T1 = np.array([[1, 0, -X0_m], [0, 1, -Y0_m], [0, 0, 1]], dtype=float)
-
-    # Scale metric units to template pixels
-    s_x = w_px / w_m
-    s_y = h_px / h_m
-    S = np.array([[s_x, 0, 0], [0, s_y, 0], [0, 0, 1]], dtype=float)
-
-    # Translate to template pixel origin
-    T2 = np.array([[1, 0, u0_px], [0, 1, v0_px], [0, 0, 1]], dtype=float)
-
-    # Combined mapping from metric to template-pixel coords
-    M_m_to_px = T2 @ S @ T1
-
-    # Compose with the given template -> image homography in pixel coordinates
-    H_m = H_px @ M_m_to_px
-
-    return H_m
-
-
 def compute_distance_from_homography(
-    H_mm2img: np.ndarray, K: np.ndarray, point_mm: tuple[float, float]
+    H_metric: Matrix3x3, K: Matrix3x3, point_metric: Point2D
 ) -> float:
     """
-    Compute the distance from the camera center to a 3D point on the template plane,
-    given the homography from metric coordinates to image pixels and the camera intrinsics.
+    Compute the Euclidean distance from camera center to a 3D point on the template plane.
 
-    Parameters:
-    -----------
-    H_mm2img : np.ndarray, shape (3,3)
-        Homography mapping [X_mm, Y_mm, 1]^T (real-world template coordinates in mm)
-        to [u_px, v_px, 1]^T (image pixel coordinates).
+    This function uses homography decomposition and camera intrinsics to determine
+    the 3D distance to any point on the reference plane, given its metric coordinates.
+    The calculation assumes the point lies on the planar template surface.
 
-    K : np.ndarray, shape (3,3)
-        Camera intrinsics matrix.
+    Mathematical Approach:
+    1. Normalize homography by camera intrinsics: H_n = K^(-1) @ H_metric
+    2. Extract scale factor from rotation column constraint: scale = 1 / ||H_n[:, 0]||
+    TODO check if it's better to use a mean of the norms of the first two columns
+    3. Recover rotation columns and translation: r1, r2, t = H_n * scale
+    4. Compute 3D point in camera coordinates: P = X_metric * r1 + Y_metric * r2 + t
+    5. Calculate Euclidean distance: distance = ||P||
 
-    point_mm : Tuple[float, float]
-        (X_mm, Y_mm) coordinates of the point on the template plane in mm.
+    Args:
+        H_metric: 3x3 homography matrix mapping metric template coordinates
+                [X_metric, Y_metric, 1]^T to image pixel coordinates [u_px, v_px, 1]^T.
+        K: 3x3 camera intrinsics matrix containing focal lengths (fx, fy),
+            principal point (cx, cy), and skew (s). Must be invertible and well-conditioned.
+        point_metric: 2D coordinates (X_metric, Y_metric) of the target point on the
+                template plane, expressed in the same metric units as the homography.
 
     Returns:
-    --------
-    distance : float
-        Euclidean distance from the camera center to the 3D point (in same units as metric homography, e.g., mm).
+        Euclidean distance from the camera center to the specified 3D point,
+        expressed in the same units as the input coordinates (e.g., meters).
+
+    Note:
+        - The returned distance represents the straight-line distance in 3D space
+        - The calculation assumes the point lies exactly on the template plane
+        - Accuracy depends on the quality of homography estimation and camera calibration
+        - Very small scale factors may indicate numerical instability
     """
-    # Unpack the point
-    X_mm, Y_mm = point_mm
+    # Extract 2D coordinates from input tuple
+    X_metric, Y_metric = point_metric
 
-    # 1) Normalize the homography by the intrinsics
-    Hn = np.linalg.inv(K) @ H_mm2img
+    # 1. Normalize homography by removing camera intrinsics
+    # This transforms from pixel coordinates to normalized camera coordinates
+    H_norm: Matrix3x3 = np.linalg.inv(K) @ H_metric
 
-    # 2) Extract the scale factor (1/d) from the first column norm
-    scale = 1.0 / np.linalg.norm(Hn[:, 0])
+    # 2. Extract scale factor from rotation column normalization constraint
+    # In homography decomposition, rotation columns should have unit norm
+    # The scale factor corrects for this normalization
+    scale: float = 1.0 / np.linalg.norm(H_norm[:, 0])
 
-    # 3) Extract rotation columns and translation
-    r1 = Hn[:, 0] * scale
-    r2 = Hn[:, 1] * scale
-    t = Hn[:, 2] * scale
+    # 3. Extract normalized rotation columns and translation vector
+    # Apply scale factor to recover the actual rotation and translation components
+    r1: Vector3D = H_norm[:, 0] * scale
+    r2: Vector3D = H_norm[:, 1] * scale
+    t: Vector3D = H_norm[:, 2] * scale
 
-    # 4) Compute the 3D point in camera coords: P = X*r1 + Y*r2 + t
-    P = X_mm * r1 + Y_mm * r2 + t
+    # 4. Compute 3D point coordinates in camera reference frame
+    # The point on the template plane is expressed as: P = X * r1 + Y * r2 + t
+    # This represents the linear combination of basis vectors plus translation
+    P: Vector3D = X_metric * r1 + Y_metric * r2 + t
 
-    # 5) Distance is the Euclidean norm of P
-    distance = np.linalg.norm(P)
+    # 5. Calculate Euclidean distance from camera center to the 3D point
+    # Distance is the magnitude of the position vector in camera coordinates
+    distance: float = np.linalg.norm(P)
+
     return distance
-
-
-def recover_pose_from_homography_v3(
-    H: np.ndarray, K: np.ndarray
-) -> tuple[np.ndarray, np.ndarray]:
-    if H.shape != (3, 3) or K.shape != (3, 3):
-        raise ValueError("H and K must both be 3×3 matrices.")
-
-    # Remove camera intrinsics
-    H_norm = np.linalg.inv(K) @ H
-
-    # Divide by Frobenius norm
-    frobenius_norm = np.linalg.norm(H_norm, ord="fro")
-    if frobenius_norm == 0:
-        raise ValueError("Degenerate homography with zero Frobenius norm.")
-    H_norm /= frobenius_norm
-
-    # Extract columns
-    r1 = H_norm[:, 0]
-    r2 = H_norm[:, 1]
-    t = H_norm[:, 2]
-
-    # Orthogonalize r1 and r2 using Gram-Schmidt
-    r1_norm = r1 / np.linalg.norm(r1)
-    r2_ortho = r2 - np.dot(r2, r1_norm) * r1_norm
-    r2_norm = r2_ortho / np.linalg.norm(r2_ortho)
-    r3_norm = np.cross(r1_norm, r2_norm)
-
-    R_approx = np.stack((r1_norm, r2_norm, r3_norm), axis=1)
-
-    # Project onto SO(3) via SVD
-    U, _, Vt = np.linalg.svd(R_approx)
-
-    # Fix reflection by flipping last column of U if needed
-    if np.linalg.det(U @ Vt) < 0:
-        U[:, -1] *= -1
-
-    R = U @ Vt
-
-    return R, t
-
-
-def recover_pose_from_homography_v2(
-    H: np.ndarray, K: np.ndarray
-) -> tuple[np.ndarray, np.ndarray]:
-    if H.shape != (3, 3) or K.shape != (3, 3):
-        raise ValueError("H and K must both be 3×3 matrices.")
-
-    # Remove camera intrinsics
-    H_norm = np.linalg.inv(K) @ H
-
-    # Normalize by the first column norm
-    scale = np.linalg.norm(H_norm[:, 0])
-    if scale == 0:
-        raise ValueError("Degenerate homography with zero scale.")
-    H_norm /= scale
-
-    # Extract columns
-    r1 = H_norm[:, 0]
-    r2 = H_norm[:, 1]
-    t = H_norm[:, 2]
-
-    # Orthogonalize r1 and r2 using Gram-Schmidt
-    r1_norm = r1 / np.linalg.norm(r1)
-    r2_ortho = r2 - np.dot(r2, r1_norm) * r1_norm
-    r2_norm = r2_ortho / np.linalg.norm(r2_ortho)
-    r3_norm = np.cross(r1_norm, r2_norm)
-
-    R_approx = np.stack((r1_norm, r2_norm, r3_norm), axis=1)
-
-    # Project onto SO(3) via SVD
-    U, _, Vt = np.linalg.svd(R_approx)
-
-    # Fix reflection by flipping last column of U if needed
-    if np.linalg.det(U @ Vt) < 0:
-        U[:, -1] *= -1
-
-    R = U @ Vt
-
-    return R, t
-
-
-def recover_pose_from_homography(
-    H: np.ndarray, K: np.ndarray, normalize_scale: bool = True
-) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Recover the camera-to-plane pose (R, t) from a planar homography.
-
-    Given a homography H that maps 3D points on the z=0 plane (up to scale)
-    into the image, and the camera intrinsic matrix K, this function factors
-    H into a rotation R and translation t such that:
-
-        s [u, v, 1]^T = K [R | t] [X, Y, 0, 1]^T
-
-    Args:
-        H (np.ndarray): A 3×3 homography matrix that maps planar world points
-            (X, Y, 1) to image coordinates (u, v, 1), up to a scale factor.
-        K (np.ndarray): The 3×3 intrinsic camera matrix.
-        normalize_scale (bool, optional): Whether to normalize the scale of the first
-            two columns of the normalized homography to ensure they have equal norm.
-            This removes the arbitrary scale factor of the homography. Defaults to True.
-
-    Returns:
-        R (np.ndarray): A 3×3 rotation matrix with det(R) = +1, representing the
-            orientation of the camera with respect to the world plane.
-        t (np.ndarray): A 3-element translation vector giving the camera position
-            relative to the origin of the world plane.
-
-    Raises:
-        ValueError: If inputs are not 3×3, or if the recovered R is singular.
-    """
-    if H.shape != (3, 3) or K.shape != (3, 3):
-        raise ValueError("H and K must both be 3×3 matrices.")
-
-    # 1. Remove camera intrinsics
-    H_norm = np.linalg.inv(K) @ H
-
-    # 2. Normalize by scale so that ‖r1‖ ~= 1 and ‖r2‖ ~= 1
-    if normalize_scale:
-        norm1 = np.linalg.norm(H_norm[:, 0])
-        norm2 = np.linalg.norm(H_norm[:, 1])
-        scale = (norm1 + norm2) / 2.0
-        if scale == 0:
-            raise ValueError("Degenerate homography with zero scale.")
-        H_norm /= scale
-
-    # 3. Extract in‐plane rotation columns and translation
-    r1 = H_norm[:, 0]
-    r2 = H_norm[:, 1]
-    t = H_norm[:, 2]
-
-    # 4. Enforce orthonormality: r3 = r1 × r2
-    r3 = np.cross(r1, r2)
-    R_approx = np.stack((r1, r2, r3), axis=1)
-
-    # 5. Project onto SO(3) via SVD
-    # SO(3) is the space of 3×3 rotation matrices with det(R) = +1
-    # We can use SVD to find the closest rotation matrix to R_approx
-    U, _, Vt = np.linalg.svd(R_approx)
-    R = U @ Vt
-
-    # 6. Fix possible reflection
-    if np.linalg.det(R) < 0:
-        R *= -1
-        t *= -1
-
-    return R, t
-
-
-def estimate_intrinsic_from_homography(
-    H: np.ndarray, principal_point: tuple[int, int], logging_level: str = "INFO"
-) -> np.ndarray:
-    """
-    Estimates a simplified camera intrinsic matrix K from a homography.
-
-    Assumes the following:
-    - Square pixels: fx = fy = f (single focal length).
-    - Zero skew.
-    - Known principal point (cx, cy), typically the image center.
-
-    Args:
-        H (np.ndarray): A (3, 3) homography matrix mapping planar 3D world points
-            to image points (in pixels).
-        principal_point (tuple[int, int]): Known principal point coordinates (cx, cy)
-            in pixel units.
-        logging_level (str): Level of logging detail ("INFO", "WARN", "ERROR", or "NONE").
-
-    Returns:
-        np.ndarray: The estimated (3, 3) intrinsic camera matrix with structure:
-            [[f, 0, cx],
-             [0, f, cy],
-             [0, 0,  1]]
-
-    Raises:
-        ValueError: If the homography is degenerate or the focal length estimate is invalid.
-
-    Notes:
-        Uses both orthogonality and norm constraints derived from rotation vectors
-        in the homography. Falls back to a norm-based approximation if necessary.
-    """
-
-    # Helper function for logging
-    def log(level, message):
-        if logging_level != "NONE" and (
-            level == logging_level
-            or (level == "WARN" and logging_level == "INFO")
-            or level == "ERROR"
-        ):
-            print(f"[{level}] {message}")
-
-    # Validate inputs
-    if H.shape != (3, 3):
-        raise ValueError(f"Invalid homography shape: {H.shape}. Expected (3, 3).")
-
-    # Check if homography is well-conditioned
-    if np.linalg.det(H) == 0:
-        raise ValueError("Homography is singular (determinant is zero).")
-
-    # Check orthogonality of the original homography columns
-    dot_product = np.dot(H[:, 0], H[:, 1])
-    norm_h1 = np.linalg.norm(H[:, 0])
-    norm_h2 = np.linalg.norm(H[:, 1])
-    normalized_dot = dot_product / (norm_h1 * norm_h2)
-
-    if abs(normalized_dot) > 0.5:
-        log(
-            "WARN",
-            f"Original homography columns may not be orthogonal: normalized dot = {normalized_dot:.3f}",
-        )
-
-    # Make a copy of the homography and normalize it properly
-    # Use a scaling that preserves the structure needed for camera calibration
-    H_norm = H.copy()
-    scale = np.sqrt(np.linalg.norm(H_norm[:, 0]) * np.linalg.norm(H_norm[:, 1]))
-    if scale > 0:
-        H_norm = H_norm / scale
-    else:
-        raise ValueError("Cannot normalize homography (scale is zero or negative).")
-
-    # Unpack principal point and homography columns
-    cx, cy = principal_point
-    h1 = H_norm[:, 0]
-    h2 = H_norm[:, 1]
-
-    def transform(h):
-        """
-        Applies K^-1 to h assuming known (cx, cy) and unknown f.
-
-        Returns a vector from which the principal point offset is removed.
-        """
-        return np.array([h[0] - cx * h[2], h[1] - cy * h[2], h[2]])
-
-    v1 = transform(h1)
-    v2 = transform(h2)
-
-    # Orthogonality constraint
-    numerator_dot = v1[0] * v2[0] + v1[1] * v2[1]
-    denominator_dot = v1[2] * v2[2]
-
-    if abs(denominator_dot) < 1e-10:
-        raise ValueError(
-            "Degenerate homography: z-components result in near-zero denominator"
-        )
-
-    f_squared_dot = -numerator_dot / denominator_dot
-    log("INFO", f"f_squared (orthogonality constraint): {f_squared_dot}")
-
-    # Norm equality constraint
-    numerator_norm = (v1[0] ** 2 + v1[1] ** 2) - (v2[0] ** 2 + v2[1] ** 2)
-    denominator_norm = v2[2] ** 2 - v1[2] ** 2
-
-    # Initialize f_squared to None to track if we have a valid estimate
-    f_squared = None
-
-    # Process the norm-based constraint result
-    if abs(denominator_norm) > 1e-10:
-        f_squared_norm = numerator_norm / denominator_norm
-        log("INFO", f"f_squared (norm constraint): {f_squared_norm}")
-
-        # Track if we have valid estimates from each method
-        dot_valid = f_squared_dot > 0
-        norm_valid = f_squared_norm > 0
-
-        # Case 1: Both estimates are valid
-        if dot_valid and norm_valid:
-            # Check if estimates are reasonably consistent
-            ratio = max(f_squared_dot, f_squared_norm) / max(
-                1e-10, min(f_squared_dot, f_squared_norm)
-            )
-            if ratio < 5.0:  # Arbitrary threshold for consistency
-                f_squared = 0.5 * (f_squared_dot + f_squared_norm)
-                log("INFO", "Using average of both estimates (they are consistent)")
-            else:
-                # Even if inconsistent, prefer the dot product estimate as it's often more reliable
-                f_squared = f_squared_dot
-                log(
-                    "WARN",
-                    f"Estimates inconsistent (ratio={ratio:.2f}). Using orthogonality-only estimate.",
-                )
-
-        # Case 2: Only norm estimate is valid
-        elif norm_valid:
-            f_squared = f_squared_norm
-            log("INFO", "Using norm-based estimate (orthogonality estimate invalid)")
-
-        # Case 3: Only dot product estimate is valid
-        elif dot_valid:
-            f_squared = f_squared_dot
-            log(
-                "INFO",
-                "Using orthogonality-only estimate (norm-based estimate invalid)",
-            )
-
-        # Case 4: Neither estimate is valid - will be handled in fallback code
-    else:
-        # If denominator_norm is approximately zero
-        if f_squared_dot > 0:
-            f_squared = f_squared_dot
-            log("INFO", "Using orthogonality-only estimate (denominator_norm ≈ 0)")
-
-    # Fallback: only if neither method gave a valid result
-    if f_squared is None or f_squared <= 0:
-        log(
-            "WARN",
-            "No valid focal length estimate from primary methods, attempting fallback...",
-        )
-        # Add small epsilon to avoid division by zero
-        mean_norm = 0.5 * (
-            (v1[0] ** 2 + v1[1] ** 2) / (v1[2] ** 2 + 1e-8)
-            + (v2[0] ** 2 + v2[1] ** 2) / (v2[2] ** 2 + 1e-8)
-        )
-        if mean_norm > 0:
-            f_squared = mean_norm
-            log("INFO", f"Fallback f_squared estimate: {f_squared}")
-        else:
-            # Try one last method: direct estimate from the scale of the homography
-            f_squared = (norm_h1 + norm_h2) / 2
-            if f_squared > 0:
-                log("WARN", f"Using homography scale as final fallback: {f_squared}")
-            else:
-                raise ValueError(
-                    "Failed to estimate a valid focal length after all fallback methods."
-                )
-
-    f = np.sqrt(f_squared)
-    K = np.array([[f, 0, cx], [0, f, cy], [0, 0, 1]], dtype=np.float32)
-
-    return K
-
-
-def estimate_intrinsic_from_homography_legacy(
-    H: np.ndarray, principal_point: tuple[int, int]
-) -> np.ndarray:
-    """
-    Estimates a simplified camera intrinsic matrix K from a homography.
-
-    Assumes the following:
-    - Square pixels: fx = fy = f (single focal length).
-    - Zero skew.
-    - Known principal point (cx, cy), typically the image center.
-
-    Args:
-        H (np.ndarray): A (3, 3) homography matrix mapping planar 3D world points
-            to image points (in pixels).
-        principal_point (tuple[int, int]): Known principal point coordinates (cx, cy)
-            in pixel units.
-
-    Returns:
-        np.ndarray: The estimated (3, 3) intrinsic camera matrix with structure:
-            [[f, 0, cx],
-            [0, f, cy],
-            [0, 0,  1]]
-
-    Raises:
-        ValueError: If the homography is degenerate or the focal length estimate is invalid.
-
-    Notes:
-        Uses both orthogonality and norm constraints derived from rotation vectors
-        in the homography. Falls back to using only the orthogonality constraint
-        if the norm-based estimate is unstable or negative.
-    """
-    # Validate inputs
-    if H.shape != (3, 3):
-        raise ValueError(f"Invalid homography shape: {H.shape}. Expected (3, 3).")
-
-    # Unpack principal point and homography columns
-    cx, cy = principal_point
-    h1 = H[:, 0]
-    h2 = H[:, 1]
-
-    def transform(h):
-        """
-        Applies K^-1 to h assuming known (cx, cy) and unknown f.
-
-        What it really does, though, is to only compute the numerator of the
-        first two components of the transformed vector, as f - which would be
-        the denominator - is unknown.
-
-        Therefore, the result is a vector from which the principal point
-        offset is removed.
-        """
-        return np.array([h[0] - cx * h[2], h[1] - cy * h[2], h[2]])
-
-    v1 = transform(h1)
-    v2 = transform(h2)
-
-    # Orthogonality constraint
-    numerator_dot = v1[0] * v2[0] + v1[1] * v2[1]
-    denominator_dot = v1[2] * v2[2]
-
-    if denominator_dot == 0:
-        raise ValueError("Degenerate homography: z-components of h1/h2 are zero")
-
-    f_squared_dot = -numerator_dot / denominator_dot
-
-    # Norm equality constraint
-    numerator_norm = (v1[0] ** 2 + v1[1] ** 2) - (v2[0] ** 2 + v2[1] ** 2)
-    denominator_norm = v2[2] ** 2 - v1[2] ** 2
-
-    # Attempt to compute f^2 using both constraints
-    f_squared = f_squared_dot
-    print(f"[INFO] f_squared (dot): {f_squared_dot}")
-
-    if denominator_norm != 0:
-        f_squared_norm = numerator_norm / denominator_norm
-        if f_squared_norm > 0 and f_squared_dot > 0:
-            f_squared = 0.5 * (f_squared_dot + f_squared_norm)
-            print(f"[INFO] f_squared (norm): {f_squared_norm}")
-            print("[INFO] Using average of both estimates")
-        else:
-            print(
-                "[INFO] Using orthogonality-only estimate (norm-based estimate invalid)"
-            )
-    else:
-        print("[INFO] Using orthogonality-only estimate (denominator_norm = 0)")
-
-    if f_squared <= 0:
-        raise ValueError(f"Invalid focal length estimate: f^2 = {f_squared}")
-
-    f = np.sqrt(f_squared)
-
-    K = np.array([[f, 0, cx], [0, f, cy], [0, 0, 1]], dtype=np.float32)
-
-    return K

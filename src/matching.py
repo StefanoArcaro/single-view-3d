@@ -1,123 +1,325 @@
+from typing import Literal
+
 import cv2
 import numpy as np
+from numpy.typing import NDArray
 
 from src.plotting import visualize_homography
 from src.utils import load_rgb
 
+# Type aliases for better readability
+ImageArray = NDArray[np.uint8]
+PointArray = NDArray[np.float32]
+DescriptorArray = NDArray[np.float32 | np.uint8]
+KeypointList = list[cv2.KeyPoint]
+MatchList = list[cv2.DMatch]
+HomographyMatrix = NDArray[np.float64]
+InlierMask = NDArray[np.uint8]
 
-def extract_features(image, method="SIFT"):
+
+def extract_features(
+    image: ImageArray, method: Literal["SIFT", "ORB"] = "SIFT"
+) -> tuple[KeypointList, DescriptorArray | None]:
     """
-    Detect keypoints and compute descriptors.
+    Detect keypoints and compute descriptors from an input image.
+
+    This function converts the input RGB image to grayscale and applies the
+    specified feature detection algorithm to extract keypoints and their
+    corresponding descriptors.
 
     Args:
-        image: RGB image as numpy array.
-        method: Feature detector ('SIFT', 'ORB', etc.).
+        image: Input RGB image as a numpy array with shape (H, W, 3) and dtype uint8.
+        method: Feature detection method to use. Options:
+            - "SIFT": Scale-Invariant Feature Transform (float32 descriptors)
+            - "ORB": Oriented FAST and Rotated BRIEF (binary descriptors)
+
     Returns:
-        keypoints, descriptors
+        A tuple containing:
+            - keypoints: List of cv2.KeyPoint objects representing detected features
+            - descriptors: Array of feature descriptors or None if no features found
+                          Shape: (n_keypoints, descriptor_length)
+                          SIFT: float32 array, ORB: uint8 array
+
+    Raises:
+        ValueError: If an unsupported feature detection method is specified.
+
+    Example:
+        >>> image = cv2.imread('image.jpg')
+        >>> image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        >>> keypoints, descriptors = extract_features(image_rgb, method="SIFT")
+        >>> print(f"Found {len(keypoints)} keypoints")
     """
-    gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+    # Convert RGB image to grayscale for feature detection
+    # Most feature detectors work on single-channel images
+    gray: NDArray[np.uint8] = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+
+    # Initialize the appropriate feature detector based on method
     if method == "SIFT":
+        # Produces float32 descriptors of length 128
         detector = cv2.SIFT_create()
     elif method == "ORB":
+        # Produces binary descriptors, limit to 2000 features for performance
         detector = cv2.ORB_create(nfeatures=2000)
     else:
-        raise ValueError(f"Unsupported method: {method}")
+        raise ValueError(f"Unsupported feature detection method: {method}")
+
+    # Detect keypoints and compute descriptors simultaneously
     keypoints, descriptors = detector.detectAndCompute(gray, None)
+
     return keypoints, descriptors
 
 
-def match_descriptors(desc1, desc2, method="BF", cross_check=True):
+def match_descriptors(
+    desc1: DescriptorArray,
+    desc2: DescriptorArray,
+    method: Literal["BF", "FLANN"] = "BF",
+    cross_check: bool = True,
+) -> MatchList:
     """
-    Match feature descriptors between two images.
+    Match feature descriptors between two sets using the specified algorithm.
+
+    This function finds correspondences between descriptors from two images
+    using either Brute Force or FLANN-based matching with appropriate
+    distance metrics and filtering techniques.
 
     Args:
-        desc1: Descriptors from image 1.
-        desc2: Descriptors from image 2.
-        method: 'BF' for BruteForce, 'FLANN' for FLANN matcher.
-        cross_check: (BF only) whether to use crossCheck.
+        desc1: Descriptors from the first image (template).
+                Shape: (n_keypoints1, descriptor_length)
+        desc2: Descriptors from the second image (scene).
+                Shape: (n_keypoints2, descriptor_length)
+        method: Matching algorithm to use:
+            - "BF": Brute Force matcher with appropriate norm
+            - "FLANN": Fast Library for Approximate Nearest Neighbors
+        cross_check: Only applicable for BF method. If True, only return
+                    matches where descriptor i in set1 matches descriptor j
+                    in set2 AND descriptor j matches descriptor i.
+
     Returns:
-        List of matches sorted by distance.
+        List of cv2.DMatch objects sorted by distance (best matches first).
+        Each DMatch contains:
+            - queryIdx: Index in desc1
+            - trainIdx: Index in desc2
+            - distance: Distance between descriptors (lower is better)
+
+    Raises:
+        ValueError: If an unsupported matching method is specified.
+
+    Note:
+        - For SIFT descriptors (float32): Uses L2 norm
+        - For ORB descriptors (uint8): Uses Hamming distance
+        - FLANN method includes ratio test (Lowe's test) with threshold 0.75
     """
     if method == "BF":
-        # Choose norm by descriptor type
+        # Choose appropriate distance norm based on descriptor data type
+        # Float descriptors (SIFT) use L2 norm, binary descriptors (ORB) use Hamming
         norm = cv2.NORM_L2 if desc1.dtype == np.float32 else cv2.NORM_HAMMING
+
+        # Create Brote Force matcher with cross-checking for additional filtering
         matcher = cv2.BFMatcher(norm, crossCheck=cross_check)
-        matches = matcher.match(desc1, desc2)
+
+        # Find matches between descriptor sets
+        matches: MatchList = matcher.match(desc1, desc2)
+
     elif method == "FLANN":
-        # FLANN parameters for SIFT
-        index_params = dict(algorithm=1, trees=5)
-        search_params = dict(checks=50)
+        # FLANN parameters optimized for SIFT-like descriptors
+        index_params = dict(
+            algorithm=1,  # FLANN_INDEX_KDTREE for float descriptors
+            trees=5,  # Number of randomized k-d trees
+        )
+        search_params = dict(
+            checks=50  # Number of times trees should be recursively traversed
+        )
+
+        # Create FLANN matcher
         matcher = cv2.FlannBasedMatcher(index_params, search_params)
-        raw_matches = matcher.knnMatch(desc1, desc2, k=2)
-        # Ratio test
+
+        # Get k=2 nearest neighbors for ratio test
+        raw_matches: list[list[cv2.DMatch]] = matcher.knnMatch(desc1, desc2, k=2)
+
+        # Apply Lowe's ratio test to filter ambiguous matches
+        # Keep matches where distance to nearest neighbor is significantly
+        # smaller than distance to second nearest neighbor
         matches = [
-            m[0]
+            m[0]  # Take the best match
             for m in raw_matches
             if len(m) == 2 and m[0].distance < 0.75 * m[1].distance
         ]
     else:
-        raise ValueError(f"Unsupported matcher: {method}")
+        raise ValueError(f"Unsupported matching method: {method}")
+
+    # Sort matches by distance (ascending order - best matches first)
     matches = sorted(matches, key=lambda x: x.distance)
+
     return matches
 
 
-def compute_homography(kp1, kp2, matches, ransac_thresh=5.0):
+def compute_homography(
+    kp1: KeypointList, kp2: KeypointList, matches: MatchList, ransac_thresh: float = 5.0
+) -> tuple[HomographyMatrix | None, InlierMask | None, float]:
     """
-    Compute homography using matched keypoints and calculate reprojection error.
+    Compute homography matrix using matched keypoints with RANSAC outlier rejection.
+
+    This function estimates the perspective transformation (homography) that maps
+    points from the first image to the second image using the provided matches.
+    It also calculates the reprojection error to assess the quality of the fit.
 
     Args:
-        kp1, kp2: Keypoints from image1 and image2.
-        matches: List of cv2.DMatch objects.
-        ransac_thresh: RANSAC reprojection threshold.
+        kp1: Keypoints from the template image.
+        kp2: Keypoints from the scene image.
+        matches: List of cv2.DMatch objects representing correspondences
+                between keypoints in kp1 and kp2.
+        ransac_thresh: RANSAC reprojection threshold in pixels. Points with
+                    reprojection error below this threshold are considered inliers.
+
     Returns:
-        homography matrix H, mask of inliers, reprojection error (pixels)
+        A tuple containing:
+            - homography: 3x3 homography matrix (float64) or None if computation fails
+            - mask: Binary mask indicating inlier matches (uint8) or None
+            - reprojection_error: Mean reprojection error for inliers in pixels (float)
+                                 Returns inf if homography computation fails
+
+    Raises:
+        ValueError: If fewer than 4 matches are provided (minimum for homography).
+
+    Note:
+        Homography estimation requires at least 4 point correspondences.
+        RANSAC helps reject outliers and provides robust estimation.
+        Lower reprojection error indicates better template matching quality.
     """
+    # Homography requires minimum 4 point correspondences
     if len(matches) < 4:
-        raise ValueError("Not enough matches to compute homography")
+        raise ValueError(
+            f"Insufficient matches for homography computation: {len(matches)} < 4"
+        )
 
-    # Extract matched points
-    pts1 = np.float32([kp1[m.queryIdx].pt for m in matches])
-    pts2 = np.float32([kp2[m.trainIdx].pt for m in matches])
+    # Extract 2D coordinates from matched keypoints
+    # queryIdx refers to template image keypoints (kp1)
+    # trainIdx refers to scene image keypoints (kp2)
+    pts1: PointArray = np.float32([kp1[m.queryIdx].pt for m in matches])
+    pts2: PointArray = np.float32([kp2[m.trainIdx].pt for m in matches])
 
-    # Compute homography
-    H, mask = cv2.findHomography(pts1, pts2, cv2.RANSAC, ransac_thresh)
+    # Compute homography using RANSAC for robust estimation
+    # RANSAC iteratively fits models to random subsets and finds consensus
+    homography_result = cv2.findHomography(pts1, pts2, cv2.RANSAC, ransac_thresh)
 
-    # Compute reprojection error
+    # Handle both OpenCV 3.x and 4.x return formats
+    if homography_result is not None and len(homography_result) == 2:
+        H, mask = homography_result
+    else:
+        H, mask = None, None
+
+    # Compute reprojection error to assess homography quality
     if H is not None:
-        # Transform pts1 using homography
-        pts1_homogeneous = np.column_stack([pts1, np.ones(len(pts1))])
-        transformed_pts = (H @ pts1_homogeneous.T).T
+        # Transform template points using computed homography
+        # Convert to homogeneous coordinates (add column of ones)
+        pts1_homogeneous: NDArray[np.float32] = np.column_stack(
+            [pts1, np.ones(len(pts1), dtype=np.float32)]
+        )
 
-        # Convert back from homogeneous coordinates
-        transformed_pts = transformed_pts[:, :2] / transformed_pts[:, 2:3]
+        # Apply homography transformation: H * pts1_homogeneous^T
+        transformed_pts_homogeneous: NDArray[np.float64] = (H @ pts1_homogeneous.T).T
 
-        # Compute Euclidean distances for all points
-        errors = np.linalg.norm(transformed_pts - pts2, axis=1)
+        # Convert back from homogeneous to Cartesian coordinates
+        transformed_pts: NDArray[np.float64] = (
+            transformed_pts_homogeneous[:, :2] / transformed_pts_homogeneous[:, 2:3]
+        )
 
-        # Calculate mean error for inliers only
+        # Compute Euclidean distances between transformed and actual points
+        errors: NDArray[np.float64] = np.linalg.norm(
+            transformed_pts - pts2.astype(np.float64), axis=1
+        )
+
+        # Calculate mean reprojection error for inliers only
         if mask is not None:
-            inlier_mask = mask.ravel().astype(bool)
-            inlier_errors = errors[inlier_mask]
-            reprojection_error = (
-                np.mean(inlier_errors) if len(inlier_errors) > 0 else float("inf")
+            # Convert mask to boolean array for indexing
+            inlier_mask: NDArray[np.bool_] = mask.ravel().astype(bool)
+            inlier_errors: NDArray[np.float64] = errors[inlier_mask]
+
+            # Compute mean error for inliers, handle empty case
+            reprojection_error: float = (
+                float(np.mean(inlier_errors))
+                if len(inlier_errors) > 0
+                else float("inf")
             )
         else:
-            reprojection_error = np.mean(errors)
+            # No inlier mask available, use all points
+            reprojection_error = float(np.mean(errors))
     else:
+        # Homography computation failed
         reprojection_error = float("inf")
 
     return H, mask, reprojection_error
 
 
 def template_match(
-    template_path, scene_path, extract_method="SIFT", match_method="BF", plot=True
-):
-    tpl = load_rgb(template_path)
-    img = load_rgb(scene_path)
-    kp_t, desc_t = extract_features(tpl, method=extract_method)
-    kp_i, desc_i = extract_features(img, method=extract_method)
-    matches = match_descriptors(desc_t, desc_i, method=match_method)
-    H, mask, reprojection_error = compute_homography(kp_t, kp_i, matches)
-    if plot:
-        visualize_homography(tpl, img, H, title="Template Matching Result")
-    return H, mask, tpl.shape[:2], reprojection_error
+    template_path: str,
+    scene_path: str,
+    extract_method: Literal["SIFT", "ORB"] = "SIFT",
+    match_method: Literal["BF", "FLANN"] = "BF",
+    plot: bool = True,
+) -> tuple[HomographyMatrix | None, InlierMask | None, tuple[int, int], float]:
+    """
+    Perform template matching between a template and scene image.
+
+    This is the main function that orchestrates the complete template matching
+    pipeline: loading images, extracting features, matching descriptors, and
+    computing the homography transformation.
+
+    Args:
+        template_path: File path to the template image.
+        scene_path: File path to the scene image where template should be found.
+        extract_method: Feature extraction method ("SIFT" or "ORB").
+        match_method: Descriptor matching method ("BF" or "FLANN").
+        plot: Whether to visualize the matching result using the plotting module.
+
+    Returns:
+        A tuple containing:
+            - homography: 3x3 transformation matrix or None if matching failed
+            - mask: Inlier mask from RANSAC or None
+            - template_shape: (height, width) of the template image
+            - reprojection_error: Mean reprojection error in pixels
+
+    Example:
+        >>> H, mask, shape, error = template_match(
+        ...     'template.jpg',
+        ...     'scene.jpg',
+        ...     extract_method="SIFT",
+        ...     match_method="FLANN"
+        ... )
+        >>> if H is not None:
+        ...     print(f"Template found with error: {error:.2f} pixels")
+        ... else:
+        ...     print("Template not found in scene")
+    """
+    # Load template and scene images as RGB arrays
+    template: ImageArray = load_rgb(template_path)
+    scene: ImageArray = load_rgb(scene_path)
+
+    # Extract features from both images using specified method
+    template_keypoints, template_descriptors = extract_features(
+        template, method=extract_method
+    )
+    scene_keypoints, scene_descriptors = extract_features(scene, method=extract_method)
+
+    # Handle case where feature extraction failed
+    if template_descriptors is None or scene_descriptors is None:
+        return None, None, template.shape[:2], float("inf")
+
+    # Match descriptors between template and scene
+    matches: MatchList = match_descriptors(
+        template_descriptors, scene_descriptors, method=match_method
+    )
+
+    # Compute homography from matched keypoints
+    homography, inlier_mask, reprojection_error = compute_homography(
+        template_keypoints, scene_keypoints, matches
+    )
+
+    # Optional visualization of the matching result
+    if plot and homography is not None:
+        visualize_homography(
+            template, scene, homography, title="Template Matching Result"
+        )
+
+    # Return results including template dimensions for reference
+    return homography, inlier_mask, template.shape[:2], reprojection_error

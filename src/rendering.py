@@ -1,5 +1,7 @@
 import json
 import os
+import subprocess
+import webbrowser
 from typing import Any
 
 import cv2
@@ -183,11 +185,12 @@ class WebVisualizer:
         metadata: dict[str, Any],
         results: dict[str, Any],
         K: np.ndarray,
-        template_path: str = "../assets/visualization_template.html.tpl",
-        output_path: str = "visualization.html",
+        template_path: str = "../web/viewer.html.tpl",
+        output_path: str = "../web/viewer.html",
         frustum_near: float = 0.1,
         frustum_far: float = 10.0,
         axes_length: float = 10.0,
+        port: int = 8000,
     ) -> None:
         """
         Initialize the web-based 3D template visualizer.
@@ -212,6 +215,7 @@ class WebVisualizer:
         self.frustum_near = frustum_near
         self.frustum_far = frustum_far
         self.axes_length = axes_length
+        self.port = port
 
     def _decompose_homography(self, template_id: str) -> tuple[np.ndarray, np.ndarray]:
         """
@@ -577,32 +581,6 @@ class WebVisualizer:
             IOError: If file I/O operations fail
             ValueError: If pose estimation fails for any template
         """
-        # print("Generating 3D web visualization...\n")
-
-        # # Generate 3D data structures
-        # print("Processing template poses...")
-        # meshes_data = self._generate_meshes_data()
-        # print(f"    -> Generated {len(meshes_data)} template meshes")
-
-        # print("Creating camera visualization...")
-        # lines_data = self._generate_lines_data()
-        # print(f"    -> Generated {len(lines_data)} line groups (axes + frustum)")
-
-        # # Load and process HTML template
-        # print("Loading HTML template...")
-        # html_template = self._load_template()
-
-        # print("Substituting data placeholders...")
-        # html_content = self._substitute_placeholders(
-        #     html_template, meshes_data, lines_data
-        # )
-
-        # # Save final result
-        # print("Saving visualization...")
-        # self._save_html(html_content)
-
-        # print("\nWeb visualization complete!")
-        # print(f"    -> Open '{self.output_path}' in your browser to view the 3D scene")
         print("=" * 60)
         print("  3D WEB VISUALIZATION GENERATOR")
         print("=" * 60)
@@ -648,3 +626,20 @@ class WebVisualizer:
         print(f"  >> Open '{self.output_path}' in your browser")
         print("  >> to view the 3D scene")
         print("=" * 60)
+
+    def show(self, html_file: str = None) -> None:
+        # Start server in background
+        if html_file is None:
+            html_file = self.output_path
+
+        print(f"Starting local server on port {self.port}...")
+        print(f"Opening {html_file} in your browser...")
+
+        subprocess.Popen(
+            ["python", "-m", "http.server", str(self.port)],
+            cwd=os.path.dirname(html_file),
+        )
+
+        # Auto-open browser
+        url = f"http://localhost:{self.port}/{os.path.basename(html_file)}"
+        webbrowser.open(url)

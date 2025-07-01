@@ -92,10 +92,6 @@
         directionalLight.position.set(1, 1, 1);
         scene.add(directionalLight);
 
-        // Axes helper
-        const axesHelper = new THREE.AxesHelper(5);
-        scene.add(axesHelper);
-
         // Distance mode variables
         let distanceMode = false;
         let allMeshes = [];
@@ -272,7 +268,7 @@
         scene.add(originLine);
 
         // Position camera
-        camera.position.set(5, 5, 5);
+        camera.position.set(3, 3, -10);
         camera.lookAt(0, 0, 0);
 
         // Mouse controls (orbit and pan)

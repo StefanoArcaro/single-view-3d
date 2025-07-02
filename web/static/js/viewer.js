@@ -1,10 +1,18 @@
 // Main viewer initialization and logic
 let scene, camera, renderer, controls;
+let mouse = new THREE.Vector2();
+let raycaster = new THREE.Raycaster();
 let allMeshes = [];
 let maxDistance = 0;
 let distanceMode = false;
+let metadata = {};
+let results = {};
 
-function initViewer(meshesData, linesData) {
+function initViewer(meshesData, linesData, templateMetadata, templateResults) {
+    // Initialize global variables
+    metadata = templateMetadata;
+    results = templateResults;
+
     setupScene();
     setupLighting();
     
@@ -17,6 +25,9 @@ function initViewer(meshesData, linesData) {
     
     // Setup UI
     setupDistanceModeToggle();
+
+    // Setup template selection
+    setupTemplateSelection();
     
     // Start animation loop
     animate();
@@ -74,7 +85,7 @@ function createMeshes(meshesData) {
         // Calculate distances for color mapping
         const distances = [];
         for (let i = 0; i < vertices.length; i += 3) {
-            const distance = Math.sqrt(vertices[i]**2 + vertices[i+1]**2 + vertices[i+2]**2);
+            const distance = Math.sqrt(vertices[i] ** 2 + vertices[i + 1] ** 2 + vertices[i + 2] ** 2);
             distances.push(distance);
             maxDistance = Math.max(maxDistance, distance);
         }
@@ -92,7 +103,9 @@ function createMeshes(meshesData) {
                         texture1: { value: texture },
                         backColor: { value: new THREE.Color(0xff0000) },
                         maxDistance: { value: 1.0 },
-                        useDistanceMode: { value: false }
+                        useDistanceMode: { value: false },
+                        selected: { value: false },
+                        hovered: { value: false }
                     },
                     vertexShader: templateVertexShader,
                     fragmentShader: templateFragmentShader,
@@ -100,6 +113,10 @@ function createMeshes(meshesData) {
                 });
 
                 const mesh = new THREE.Mesh(geometry, material);
+
+                // Store template ID for selection
+                mesh.userData.templateId = meshData.id;
+
                 scene.add(mesh);
                 allMeshes.push(mesh);
                 
@@ -108,7 +125,7 @@ function createMeshes(meshesData) {
             },
             undefined,
             error => {
-                console.error("❌ Texture load failed:", meshData.texture, error);
+                console.error("Texture load failed:", meshData.texture, error);
             }
         );
     });
@@ -151,7 +168,7 @@ function updateMaxDistanceUniforms() {
 function setupDistanceModeToggle() {
     document.getElementById('distanceMode').addEventListener('change', (event) => {
         distanceMode = event.target.checked;
-        document.getElementById('colorLegend').style.display = distanceMode ? 'block' : 'none';
+        document.getElementById('distanceColorLegend').style.display = distanceMode ? 'block' : 'none';
         
         // Toggle shader uniforms for all meshes
         allMeshes.forEach(mesh => {
@@ -160,6 +177,11 @@ function setupDistanceModeToggle() {
             }
         });
     });
+}
+
+function setupTemplateSelection() {
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('click', onTemplateClick);
 }
 
 function animate() {
@@ -171,4 +193,96 @@ function onWindowResize() {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+function onMouseMove(event) {
+    // Normalize mouse coordinates to -1 to 1 range
+    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+    mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+    // Find out which mesh is under the mouse cursor
+    raycaster.setFromCamera(mouse, camera);
+    const intersects = raycaster.intersectObjects(allMeshes);
+
+    // Reset all mesh materials to the default state
+    allMeshes.forEach(mesh => {
+        if (mesh.material.uniforms) {
+            // mesh.material.uniforms.selected = { value: false }; TODO check if this is needed
+            mesh.material.uniforms.hovered = { value: false };
+        }
+    });
+
+    // Highlight hovered mesh
+    if (intersects.length > 0) {
+        const hoveredMesh = intersects[0].object;
+        if (hoveredMesh.material.uniforms) {
+            hoveredMesh.material.uniforms.hovered = { value: true };
+        }
+        document.body.style.cursor = 'pointer';
+    } else {
+        document.body.style.cursor = 'default';
+    }
+}
+
+function onTemplateClick(event) {
+    raycaster.setFromCamera(mouse, camera);
+    const intersects = raycaster.intersectObjects(allMeshes);
+
+    if (intersects.length > 0) {
+        const clickedMesh = intersects[0].object;
+        const templateId = clickedMesh.userData.templateId;
+
+        // Handle template selection logic
+        selectTemplate(templateId);
+    } else {
+        // Deselect template if clicked outside
+        deselectTemplate();
+    }
+}
+
+function selectTemplate(templateId) {
+    // Update UI to reflect selected template
+    allMeshes.forEach(mesh => {
+        if (mesh.material.uniforms) {
+            mesh.material.uniforms.selected = { value: mesh.userData.templateId === templateId };
+        }
+    });
+
+    // Update info panel
+    const data = metadata[templateId];
+    const result = results[templateId];
+    
+    document.getElementById('templateId').textContent = templateId;
+    document.getElementById('templateLabel').textContent = data?.label || 'N/A';
+    document.getElementById('templateDimensions').textContent = 
+        (data?.width && data?.height) ? `${data.width} x ${data.height}` : 'N/A';
+    document.getElementById('templateDistancePred').textContent = 
+        result?.distance_pred?.toFixed(2) || 'N/A';
+    document.getElementById('templateDistanceTrue').textContent = 
+        result?.distance_true?.toFixed(2) || 'N/A';
+    document.getElementById('templateError').textContent = 
+        result?.error?.toFixed(2) || 'N/A';
+    document.getElementById('templateErrorPercent').textContent = 
+        result?.error_percent?.toFixed(2) + '%' || 'N/A';
+
+    // Display the info panel
+    document.getElementById('templateDetailsPanel').style.display = 'block';
+
+    // Still log the selected template ID for debugging
+    console.log('Template selected:', templateId);
+}
+
+function deselectTemplate() {
+    // Reset all mesh materials to the default state
+    allMeshes.forEach(mesh => {
+        if (mesh.material.uniforms) {
+            mesh.material.uniforms.selected = { value: false };
+        }
+    });
+
+    // Hide the info panel
+    document.getElementById('templateDetailsPanel').style.display = 'none';
+
+    // Log deselection for debugging
+    console.log('Template deselected');
 }

@@ -14,19 +14,19 @@ templates:
     height: 180.0
 
   - id: T2
-    label: "PDJ Book"
+    label: "Program Development in Java"
     path: "assets/templates/template_02.jpg"
     width: 185.0
     height: 242.0
 
   - id: T3
-    label: "TPP Book"
+    label: "The Pragmatic Programmer"
     path: "assets/templates/template_03.jpg"
     width: 187.0
     height: 232.0
 
   - id: T4
-    label: "PIC Book"
+    label: "Programmazione in C"
     path: "assets/templates/template_04.jpg"
     width: 167.0
     height: 240.0

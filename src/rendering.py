@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import webbrowser
+from pathlib import Path
 from typing import Any
 
 import cv2
@@ -182,14 +183,14 @@ class WebVisualizer:
 
     def __init__(
         self,
-        metadata: dict[str, Any],
+        metadata: dict[str, Template],
         results: dict[str, Any],
         K: np.ndarray,
-        template_path: str = "../web/viewer.html.tpl",
-        output_path: str = "../web/viewer.html",
         frustum_near: float = 0.1,
         frustum_far: float = 10.0,
         axes_length: float = 10.0,
+        template_path: str | None = None,
+        output_path: str | None = None,
         port: int = 8000,
     ) -> None:
         """
@@ -210,12 +211,43 @@ class WebVisualizer:
         self.metadata = metadata
         self.results = results
         self.K = K
-        self.template_path = template_path
-        self.output_path = output_path
         self.frustum_near = frustum_near
         self.frustum_far = frustum_far
         self.axes_length = axes_length
+
+        # Find project root
+        self.project_root = self._find_project_root()
+
+        # Set default paths relative to the project root
+        if template_path is None:
+            template_path = self.project_root / "web" / "viewer.html.tpl"
+        if output_path is None:
+            output_path = self.project_root / "web" / "viewer.html"
+
+        self.template_path = Path(template_path)
+        self.output_path = Path(output_path)
         self.port = port
+
+    def _find_project_root(self) -> Path:
+        """
+        Find the project root by looking for a marker files and directories.
+
+        Returns:
+            Path to the project root directory
+        """
+        current = Path(__file__).resolve()
+
+        # Project root markers
+        markers = ["src", "README.md", "pyproject.toml"]
+
+        for parent in [current] + list(current.parents):
+            if any((parent / marker).exists() for marker in markers):
+                print(f"Project root found: {parent}")
+                return parent
+
+        # Fallback: assume parent of the directory containing this file
+        print(f"Project root not found, using {current.parent}")
+        return current.parent
 
     def _decompose_homography(self, template_id: str) -> tuple[np.ndarray, np.ndarray]:
         """
@@ -346,6 +378,7 @@ class WebVisualizer:
                 texture_path = template.path if template.path else ""
 
                 mesh_data = {
+                    "id": template_id,
                     "vertices": vertices,
                     "triangles": triangles,
                     "texture": os.path.join("..", texture_path),
@@ -539,10 +572,16 @@ class WebVisualizer:
         # Convert data to JSON strings
         meshes_json = json.dumps(meshes_data, indent=2)
         lines_json = json.dumps(lines_data, indent=2)
+        metadata_json = json.dumps(
+            {k: v.model_dump() for k, v in self.metadata.items()}, indent=2
+        )
+        results_json = json.dumps(self.results, indent=2)
 
         # Substitute placeholders
         html_content = html_template.replace("{ meshes_json }", meshes_json)
         html_content = html_content.replace("{ lines_json }", lines_json)
+        html_content = html_content.replace("{ metadata_json }", metadata_json)
+        html_content = html_content.replace("{ results_json }", results_json)
 
         return html_content
 
@@ -627,19 +666,20 @@ class WebVisualizer:
         print("  >> to view the 3D scene")
         print("=" * 60)
 
-    def show(self, html_file: str = None) -> None:
-        # Start server in background
-        if html_file is None:
-            html_file = self.output_path
-
+    def show(self) -> None:
+        """
+        Start a local web server and open the visualization in the browser.
+        """
         print(f"Starting local server on port {self.port}...")
-        print(f"Opening {html_file} in your browser...")
+        print(f"Opening {self.output_path} in your browser...")
 
+        # Start server from project root
         subprocess.Popen(
             ["python", "-m", "http.server", str(self.port)],
-            cwd=os.path.dirname(html_file),
+            cwd=str(self.project_root),
         )
 
-        # Auto-open browser
-        url = f"http://localhost:{self.port}/{os.path.basename(html_file)}"
+        # Calculate relative path from project root to HTML file
+        relative_path = self.output_path.relative_to(self.project_root)
+        url = f"http://localhost:{self.port}/{relative_path}"
         webbrowser.open(url)

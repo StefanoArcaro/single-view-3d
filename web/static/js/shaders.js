@@ -1,8 +1,10 @@
 // Vertex shader for template meshes
 const templateVertexShader = `
     attribute float distance;
+
     varying vec2 vUv;
     varying float vDistance;
+
     void main() {
         vUv = uv;
         vDistance = distance;
@@ -16,6 +18,9 @@ const templateFragmentShader = `
     uniform vec3 backColor;
     uniform float maxDistance;
     uniform bool useDistanceMode;
+    uniform bool selected;
+    uniform bool hovered;
+
     varying vec2 vUv;
     varying float vDistance;
 
@@ -39,14 +44,28 @@ const templateFragmentShader = `
     }
 
     void main() {
+        vec4 baseColor;
+
         if (gl_FrontFacing) {
             if (useDistanceMode) {
-                gl_FragColor = vec4(distanceToColor(vDistance, maxDistance), 1.0);
+                baseColor = vec4(distanceToColor(vDistance, maxDistance), 1.0);
             } else {
-                gl_FragColor = texture2D(texture1, vUv);
+                baseColor = texture2D(texture1, vUv);
             }
         } else {
-            gl_FragColor = vec4(backColor, 1.0);
+            baseColor = vec4(backColor, 1.0);
         }
+
+        // Apply selection and hover effects
+        if (selected) {
+            // Yellow tint
+            baseColor = mix(baseColor, vec4(1.0, 1.0, 0.0, 1.0), 0.3);
+        } else if (hovered) {
+            // Cyan tint
+            baseColor = mix(baseColor, vec4(0.0, 1.0, 1.0, 1.0), 0.2);
+        }
+
+        // Final color output
+        gl_FragColor = baseColor;
     }
 `;

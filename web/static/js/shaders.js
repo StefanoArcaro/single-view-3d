@@ -17,6 +17,7 @@ const templateFragmentShader = `
     uniform sampler2D texture1;
     uniform vec3 backColor;
     uniform float maxDistance;
+    uniform float minDistance;
     uniform bool useDistanceMode;
     uniform bool selected;
     uniform bool hovered;
@@ -24,8 +25,8 @@ const templateFragmentShader = `
     varying vec2 vUv;
     varying float vDistance;
 
-    vec3 distanceToColor(float dist, float maxDist) {
-        float normalized = clamp(dist / maxDist, 0.0, 1.0);
+    vec3 distanceToColor(float dist, float maxDist, float minDist) {
+        float normalized = clamp((dist - minDist) / (maxDist - minDist), 0.0, 1.0);
         
         // Color mapping: blue -> cyan -> green -> yellow -> red
         if (normalized < 0.25) {
@@ -48,7 +49,7 @@ const templateFragmentShader = `
 
         if (gl_FrontFacing) {
             if (useDistanceMode) {
-                baseColor = vec4(distanceToColor(vDistance, maxDistance), 1.0);
+                baseColor = vec4(distanceToColor(vDistance, maxDistance, minDistance), 1.0);
             } else {
                 baseColor = texture2D(texture1, vUv);
             }

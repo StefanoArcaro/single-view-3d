@@ -3,8 +3,9 @@ let scene, camera, renderer, controls;
 let mouse = new THREE.Vector2();
 let raycaster = new THREE.Raycaster();
 let allMeshes = [];
-let maxDistance = 0;
 let distanceMode = false;
+let maxDistance = 0;
+let minDistance = Infinity;
 let metadata = {};
 let results = {};
 
@@ -60,39 +61,55 @@ function setupLighting() {
 }
 
 function createMeshes(meshesData) {
+    // Calculate global min/max distances across all meshes
+    let globalMaxDistance = 0;
+    let globalMinDistance = Infinity;
+
+    // Store distances for each mesh
+    const allDistances = [];
+    
     meshesData.forEach((meshData, index) => {
         const geometry = new THREE.BufferGeometry();
-
-        // Convert vertices and triangles
         const vertices = new Float32Array(meshData.vertices.flat());
         const indices = new Uint16Array(meshData.triangles.flat());
-
-        geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
-        geometry.setIndex(new THREE.BufferAttribute(indices, 1));
-        geometry.computeVertexNormals();
-
-        // Inject basic UVs (only valid if the mesh is a quad with 4 vertices)
-        if (vertices.length === 12) {  // 4 vertices * 3 coordinates
-            const uvs = new Float32Array([
-                0, 1,   // vertex 0
-                1, 1,   // vertex 1
-                1, 0,   // vertex 2
-                0, 0    // vertex 3
-            ]);
-            geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
-        }
-
-        // Calculate distances for color mapping
+        
+        // Calculate distances for this mesh
         const distances = [];
         for (let i = 0; i < vertices.length; i += 3) {
             const distance = Math.sqrt(vertices[i] ** 2 + vertices[i + 1] ** 2 + vertices[i + 2] ** 2);
             distances.push(distance);
-            maxDistance = Math.max(maxDistance, distance);
+            globalMaxDistance = Math.max(globalMaxDistance, distance);
+            globalMinDistance = Math.min(globalMinDistance, distance);
         }
         
-        // Store distances as vertex attribute
+        allDistances.push({ geometry, vertices, indices, distances, meshData });
+    });
+    
+    // Update global variables
+    maxDistance = globalMaxDistance;
+    minDistance = globalMinDistance;
+    
+    console.log(`Global - Max Distance: ${maxDistance}, Min Distance: ${minDistance}`);
+    
+    // Create all meshes
+    allDistances.forEach(({ geometry, vertices, indices, distances, meshData }, index) => {
+        geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+        geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+        geometry.computeVertexNormals();
+        
+        // Inject basic UVs (only valid if the mesh is a quad with 4 vertices)
+        if (vertices.length === 12) {
+            const uvs = new Float32Array([
+                0, 1,
+                1, 1,
+                1, 0,
+                0, 0
+            ]);
+            geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+        }
+        
         geometry.setAttribute('distance', new THREE.BufferAttribute(new Float32Array(distances), 1));
-
+        
         // Load texture and create mesh
         const loader = new THREE.TextureLoader();
         loader.load(
@@ -102,7 +119,8 @@ function createMeshes(meshesData) {
                     uniforms: {
                         texture1: { value: texture },
                         backColor: { value: new THREE.Color(0xff0000) },
-                        maxDistance: { value: 1.0 },
+                        maxDistance: { value: maxDistance },
+                        minDistance: { value: minDistance },
                         useDistanceMode: { value: false },
                         selected: { value: false },
                         hovered: { value: false }
@@ -113,15 +131,10 @@ function createMeshes(meshesData) {
                 });
 
                 const mesh = new THREE.Mesh(geometry, material);
-
-                // Store template ID for selection
                 mesh.userData.templateId = meshData.id;
-
+                
                 scene.add(mesh);
                 allMeshes.push(mesh);
-                
-                // Update max distance uniform for all meshes
-                updateMaxDistanceUniforms();
             },
             undefined,
             error => {
@@ -154,14 +167,6 @@ function createLines(linesData) {
 
         const lines = new THREE.LineSegments(geometry, material);
         scene.add(lines);
-    });
-}
-
-function updateMaxDistanceUniforms() {
-    allMeshes.forEach(mesh => {
-        if (mesh.material.uniforms && mesh.material.uniforms.maxDistance) {
-            mesh.material.uniforms.maxDistance.value = maxDistance;
-        }
     });
 }
 

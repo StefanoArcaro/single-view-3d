@@ -15,9 +15,6 @@ Mathematical Background:
 Homography decomposition assumes a planar scene and can yield up to 4 possible
 camera poses. This module implements a method to disambiguate these solutions
 and work with real-world metric measurements.
-
-Dependencies:
-    - numpy: For matrix operations and numerical computations
 """
 
 import numpy as np

@@ -3,7 +3,7 @@ FUNCTION run_homography_roundtrip_tests(K: 3×3 intrinsics, N: number of trials)
   INITIALIZE empty lists:
     rot_errors      ← []
     trans_dir_errors← []
-    scale_biases    ← []
+    scale_errors    ← []
 
   FOR i IN 1…N DO
 
@@ -57,19 +57,19 @@ FUNCTION run_homography_roundtrip_tests(K: 3×3 intrinsics, N: number of trials)
          cosφ     ← dot(t̂_rec, t̂_true)
          φ_e      ← arccos(clamp(cosφ, –1, +1)) * (180/π)
 
-    6.3  # Scale bias s_e (%)
+    6.3  # Scale error s_e (%)
          s_e      ← abs(norm(t_rec) – norm(t_true)) / norm(t_true) * 100
 
     #— 7. Record errors —#
 
     APPEND θ_e to rot_errors
     APPEND φ_e to trans_dir_errors
-    APPEND s_e to scale_biases
+    APPEND s_e to scale_errors
 
   END FOR
 
   RETURN { 
     rotation_errors      : rot_errors,
     translation_errors   : trans_dir_errors,
-    scale_bias_percent   : scale_biases
+    scale_error_percent   : scale_errors
   }

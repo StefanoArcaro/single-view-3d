@@ -323,3 +323,228 @@ def template_match(
 
     # Return results including template dimensions for reference
     return homography, inlier_mask, template.shape[:2], reprojection_error
+
+
+# ============================================================
+
+
+def template_match_for_calibration(
+    template_path: str,
+    scene_path: str,
+    extract_method: Literal["SIFT", "ORB"] = "SIFT",
+    match_method: Literal["BF", "FLANN"] = "BF",
+    plot: bool = True,
+    min_inliers: int = 10,
+    template_real_size: tuple[float, float] = None,
+) -> tuple[
+    HomographyMatrix | None,
+    InlierMask | None,
+    tuple[int, int],
+    float,
+    np.ndarray | None,
+    np.ndarray | None,
+]:
+    """
+    Enhanced template matching that also prepares keypoint correspondences for camera calibration.
+
+    This function performs template matching and additionally extracts the inlier keypoint
+    correspondences in the format required by CalibrationSimple.refine_intrinsics().
+
+    Args:
+        template_path: File path to the template image.
+        scene_path: File path to the scene image where template should be found.
+        extract_method: Feature extraction method ("SIFT" or "ORB").
+        match_method: Descriptor matching method ("BF" or "FLANN").
+        plot: Whether to visualize the matching result.
+        min_inliers: Minimum number of inliers required for valid result.
+        template_real_size: Real-world size of template (width, height) in mm/meters.
+                          If None, uses normalized coordinates [0,1] x [0,1].
+
+    Returns:
+        A tuple containing:
+            - homography: 3x3 transformation matrix or None if matching failed
+            - mask: Inlier mask from RANSAC or None
+            - template_shape: (height, width) of the template image
+            - reprojection_error: Mean reprojection error in pixels
+            - keypoint_pairs: Array of shape (N, 4) with [x_scene, y_scene, x_template, y_template]
+            - template_points: Array of shape (N, 2) with [X_world, Y_world] coordinates
+    """
+    # Load template and scene images as RGB arrays
+    template: ImageArray = load_rgb(template_path)
+    scene: ImageArray = load_rgb(scene_path)
+
+    # Extract features from both images using specified method
+    template_keypoints, template_descriptors = extract_features(
+        template, method=extract_method
+    )
+    scene_keypoints, scene_descriptors = extract_features(scene, method=extract_method)
+
+    # Handle case where feature extraction failed
+    if template_descriptors is None or scene_descriptors is None:
+        return None, None, template.shape[:2], float("inf"), None, None
+
+    # Match descriptors between template and scene
+    matches: MatchList = match_descriptors(
+        template_descriptors, scene_descriptors, method=match_method
+    )
+
+    # Compute homography from matched keypoints
+    homography, inlier_mask, reprojection_error = compute_homography(
+        template_keypoints, scene_keypoints, matches
+    )
+
+    # Initialize return values for calibration data
+    keypoint_pairs = None
+    template_points = None
+
+    if homography is not None and inlier_mask is not None:
+        # Extract inlier matches only
+        inlier_matches = [
+            matches[i] for i, is_inlier in enumerate(inlier_mask) if is_inlier
+        ]
+
+        # Check if we have enough inliers
+        if len(inlier_matches) < min_inliers:
+            print(
+                f"Warning: Only {len(inlier_matches)} inliers found, minimum {min_inliers} required"
+            )
+            return (
+                homography,
+                inlier_mask,
+                template.shape[:2],
+                reprojection_error,
+                None,
+                None,
+            )
+
+        # Extract keypoint coordinates for inlier matches
+        template_pts_img = []
+        scene_pts_img = []
+
+        for match in inlier_matches:
+            # Get keypoint coordinates
+            template_kp = template_keypoints[match.queryIdx]
+            scene_kp = scene_keypoints[match.trainIdx]
+
+            # Extract (x, y) coordinates
+            template_pts_img.append([template_kp.pt[0], template_kp.pt[1]])
+            scene_pts_img.append([scene_kp.pt[0], scene_kp.pt[1]])
+
+        template_pts_img = np.array(template_pts_img)
+        scene_pts_img = np.array(scene_pts_img)
+
+        # Prepare keypoint_pairs in format [x_scene, y_scene, x_template, y_template]
+        keypoint_pairs = np.hstack([scene_pts_img, template_pts_img])
+
+        # Convert template pixel coordinates to world coordinates
+        template_h, template_w = template.shape[:2]
+
+        if template_real_size is not None:
+            # Use real-world dimensions
+            real_width, real_height = template_real_size
+
+            # Convert from pixel coordinates to world coordinates
+            # Assuming template coordinate system with origin at top-left
+            template_x_world = (template_pts_img[:, 0] / template_w) * real_width
+            template_y_world = (template_pts_img[:, 1] / template_h) * real_height
+
+            template_points = np.column_stack([template_x_world, template_y_world])
+        else:
+            # Use normalized coordinates [0,1] x [0,1]
+            template_x_norm = template_pts_img[:, 0] / template_w
+            template_y_norm = template_pts_img[:, 1] / template_h
+
+            template_points = np.column_stack([template_x_norm, template_y_norm])
+
+    # Optional visualization of the matching result
+    if plot and homography is not None:
+        visualize_homography(
+            template, scene, homography, title="Template Matching Result"
+        )
+
+        # Additional plot showing inlier keypoints if calibration data is available
+        if keypoint_pairs is not None:
+            print(
+                f"Extracted {len(keypoint_pairs)} inlier correspondences for calibration"
+            )
+
+    # Return results including calibration data
+    return (
+        homography,
+        inlier_mask,
+        template.shape[:2],
+        reprojection_error,
+        keypoint_pairs,
+        template_points,
+    )
+
+
+def batch_template_match_for_calibration(
+    template_paths: list[str],
+    scene_path: str,
+    extract_method: Literal["SIFT", "ORB"] = "SIFT",
+    match_method: Literal["BF", "FLANN"] = "BF",
+    plot: bool = False,
+    min_inliers: int = 10,
+    template_real_sizes: list[tuple[float, float]] = None,
+) -> tuple[list[HomographyMatrix], list[np.ndarray], list[np.ndarray]]:
+    """
+    Batch process multiple templates against a single scene for camera calibration.
+
+    Args:
+        template_paths: List of paths to template images.
+        scene_path: Path to the scene image containing all templates.
+        extract_method: Feature extraction method.
+        match_method: Descriptor matching method.
+        plot: Whether to visualize each matching result.
+        min_inliers: Minimum inliers required per template.
+        template_real_sizes: List of real-world sizes for each template.
+                           If None, uses normalized coordinates for all.
+
+    Returns:
+        A tuple containing:
+            - valid_homographies: List of homography matrices for successful matches
+            - all_keypoint_pairs: List of keypoint correspondence arrays
+            - all_template_points: List of template world coordinate arrays
+    """
+    valid_homographies = []
+    all_keypoint_pairs = []
+    all_template_points = []
+
+    if template_real_sizes is None:
+        template_real_sizes = [None] * len(template_paths)
+
+    print(f"Processing {len(template_paths)} templates against scene...")
+
+    for i, (template_path, real_size) in enumerate(
+        zip(template_paths, template_real_sizes)
+    ):
+        print(f"\nProcessing template {i + 1}/{len(template_paths)}: {template_path}")
+
+        result = template_match_for_calibration(
+            template_path=template_path,
+            scene_path=scene_path,
+            extract_method=extract_method,
+            match_method=match_method,
+            plot=plot,
+            min_inliers=min_inliers,
+            template_real_size=real_size,
+        )
+
+        homography, mask, shape, error, keypoint_pairs, template_points = result
+
+        if homography is not None and keypoint_pairs is not None:
+            print(
+                f"✓ Template {i + 1}: {len(keypoint_pairs)} inliers, error: {error:.2f}px"
+            )
+            valid_homographies.append(homography)
+            all_keypoint_pairs.append(keypoint_pairs)
+            all_template_points.append(template_points)
+        else:
+            print(f"✗ Template {i + 1}: Failed to match or insufficient inliers")
+
+    print(
+        f"\nSuccessfully processed {len(valid_homographies)}/{len(template_paths)} templates"
+    )
+
+    return valid_homographies, all_keypoint_pairs, all_template_points

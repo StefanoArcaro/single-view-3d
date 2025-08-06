@@ -239,6 +239,39 @@ class MeasurementData(BaseModel):
         """
         return self._scene_lookup.get(scene_id)
 
+    def get_scene_templates(self, scene_id: str) -> list[str] | None:
+        """
+        Get all template IDs used in a specific scene.
+
+        This method retrieves all templates that are referenced in the distance
+        measurements of the specified scene.
+
+        Args:
+            scene_id: ID of the scene to analyze
+
+        Returns: template IDs used in the scene, or None if the scene does not exist
+        """
+        # Validate scene ID
+        if scene_id not in self._scene_lookup:
+            return None
+
+        # Retrieve the scene object
+        scene = self.get_scene(scene_id)
+        if not scene:
+            return None
+
+        # Use a set to avoid duplicate templates
+        templates_in_scene: set[str] = set()
+        for distance in scene.distances:
+            from_template = self.get_template(distance.from_)
+            to_template = self.get_template(distance.to)
+            if from_template:
+                templates_in_scene.add(from_template.id)
+            if to_template:
+                templates_in_scene.add(to_template.id)
+
+        return list(templates_in_scene)
+
     def get_all_scenes(self) -> dict[str, list[str]]:
         """
         Get a mapping of all scenes to the templates they contain.

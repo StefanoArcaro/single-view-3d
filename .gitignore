@@ -175,3 +175,6 @@ cython_debug/
 
 # HTML files
 *.html
+
+# Images
+figures/

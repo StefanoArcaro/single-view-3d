@@ -43,7 +43,7 @@ function setupScene() {
     renderer = new THREE.WebGLRenderer({ antialias: true });
     
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setClearColor(0x444444);
+    renderer.setClearColor(0x000000);
     document.body.appendChild(renderer.domElement);
     
     // Position camera

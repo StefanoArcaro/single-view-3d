@@ -41,8 +41,7 @@ def recover_all_poses_from_homography(H: Matrix3x3, K: Matrix3x3) -> list[PoseSo
     Mathematical Approach:
     1. Normalize homography by removing camera intrinsics: H_norm = K^(-1) * H
     2. Extract rotation columns and translation from normalized homography
-    3. Apply scale normalization using the norm of the first rotation column
-    TODO check if it's better to use a mean of the norms of the first two columns
+    3. Apply scale normalization using the mean of the norms of the first two rotation columns
     4. Generate all possible sign combinations for the ambiguous solutions
     5. Project approximate rotation matrices to the SO(3) manifold using SVD
 
@@ -75,7 +74,8 @@ def recover_all_poses_from_homography(H: Matrix3x3, K: Matrix3x3) -> list[PoseSo
 
     # 3. Compute scale factor from the constraint that rotation columns are unit vectors
     # The scale factor normalizes the decomposition
-    scale: float = np.linalg.norm(r1)
+    # scale: float = np.linalg.norm(r1)
+    scale: float = (np.linalg.norm(r1) + np.linalg.norm(r2)) / 2.0
 
     # 4. Generate solutions
     solutions: list[PoseSolution] = []

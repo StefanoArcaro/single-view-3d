@@ -39,9 +39,6 @@ class AnalysisResults:
     # Pixel error results
     pixel_errors: dict[float, list[float]] = field(default_factory=dict)
 
-    # Noise scale results
-    noise_to_signal_ratios: dict[float, list[float]] = field(default_factory=dict)
-
     # Computed statistics (populated after analysis)
     statistics: dict[str, dict[float, float]] = field(default_factory=dict)
 
@@ -245,7 +242,6 @@ class Analyzer:
             # Initialize storage for this noise level
             focal_estimates = []
             pixel_error_list = []
-            noise_ratios = []
             distance_estimates = [0, 0, 0]
             angle_estimates = [0, 0, 0]
             calibration_failures = 0
@@ -274,21 +270,14 @@ class Analyzer:
                         calibration_failures += 1
 
                     # Run pixel error analysis (use first homography as representative)
-                    pixel_err, pix_success = self._run_pixel_error_trial(
-                        homographies, sigma
-                    )
+                    pixel_err, pix_success = self._run_pixel_error_trial(homographies)
                     if pix_success:
                         pixel_error_list.extend(pixel_err)
                     else:
                         pixel_error_failures += 1
 
-                    # Run noise scale analysis
-                    ratios = self._run_noise_scale_trial(homographies)
-                    noise_ratios.extend(ratios)
-
                     # Recover the pose estimate proxies
                     distances, angles = self._run_pose_estimation_trial(homographies)
-
                     distance_estimates += distances
                     angle_estimates += angles
 
@@ -301,7 +290,6 @@ class Analyzer:
             # Store results for this noise level
             self.results.focal_length_estimates[sigma] = focal_estimates
             self.results.pixel_errors[sigma] = pixel_error_list
-            self.results.noise_to_signal_ratios[sigma] = noise_ratios
             self.results.distance_estimates[sigma] = distance_estimates / self.n_trials
             self.results.angle_estimates[sigma] = angle_estimates / self.n_trials
 
@@ -364,7 +352,7 @@ class Analyzer:
             return 0.0, False
 
     def _run_pixel_error_trial(
-        self, homographies_noisy: list[np.ndarray], sigma: float
+        self, homographies_noisy: list[np.ndarray]
     ) -> tuple[list[float], bool]:
         """
         Run pixel error analysis comparing noisy homographies to clean ones.
@@ -375,8 +363,8 @@ class Analyzer:
         # Create grid of world plane points (assuming calibration target is ~30cm x 30cm)
         # Points on the Z=0 plane in world coordinates
         world_size = 0.3  # 30cm calibration target
-        x_grid = np.linspace(-world_size / 2, world_size / 2, 20)  # 20x20 grid
-        y_grid = np.linspace(-world_size / 2, world_size / 2, 20)
+        x_grid = np.linspace(-world_size / 2, world_size / 2, 30)  # 30x30 grid
+        y_grid = np.linspace(-world_size / 2, world_size / 2, 30)
 
         points = []
         for x in x_grid:
@@ -432,37 +420,6 @@ class Analyzer:
             return all_pixel_errors, True
         else:
             return [], False
-
-    def _run_noise_scale_trial(
-        self, homographies_noisy: list[np.ndarray]
-    ) -> list[float]:
-        """
-        Run noise scale analysis for one trial.
-
-        Returns:
-            list_of_noise_to_signal_ratios
-        """
-        noise_ratios = []
-
-        # Compare each noisy homography to its clean counterpart
-        for i, H_noisy in enumerate(homographies_noisy):
-            H_clean = self.dataset.homographies_clean[i]
-
-            # Get homography elements (excluding H[2,2] which is normalized to 1)
-            clean_elements = H_clean.flatten()[:8]
-            noisy_elements = H_noisy.flatten()[:8]
-
-            # Compute noise (difference between noisy and clean)
-            noise = noisy_elements - clean_elements
-
-            # Compute element-wise noise-to-signal ratios
-            # Add small epsilon to avoid division by zero
-            ratios = np.abs(noise) / (np.abs(clean_elements) + 1e-10)
-
-            # Add all ratios from this homography
-            noise_ratios.extend(ratios)
-
-        return noise_ratios
 
     def _run_pose_estimation_trial(
         self, homographies_noisy: list[np.ndarray]
@@ -644,57 +601,45 @@ class Plotter:
     def plot_all(self):
         """Generate all plots."""
         self.plot_focal_length()
-        self.plot_pixel_errors()
         self.plot_distance_errors()
         self.plot_angle_errors()
 
     def plot_focal_length(self):
-        """Plot focal length estimates with error bars and relative error."""
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=self.figsize, height_ratios=[3, 2])
+        """Plot focal length absolute error in pixels and percentage."""
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=self.figsize, height_ratios=[1, 1])
 
-        noise_levels = self.stats["noise_levels"]
+        pixel_rms = self.stats["pixel_error_rms"]
         f_mean = self.stats["focal_length_mean"]
-        f_std = self.stats["focal_length_std"]
         f_gt = self.dataset.K[0, 0]
 
         # Remove NaN values for plotting
-        valid_mask = ~np.isnan(f_mean)
+        valid_mask = ~np.isnan(f_mean) & ~np.isnan(pixel_rms)
         if not np.any(valid_mask):
             print("Warning: No valid focal length data to plot")
             return
 
-        x_valid = noise_levels[valid_mask]
+        x_valid = pixel_rms[valid_mask]
         f_mean_valid = f_mean[valid_mask]
-        f_std_valid = f_std[valid_mask]
 
-        # Top plot: Focal length estimates
-        ax1.errorbar(
+        # Calculate absolute errors
+        error_pixels = np.abs(f_mean_valid - f_gt)
+        error_pct = self.stats["focal_length_error_pct"][valid_mask]
+
+        # Top plot: Absolute error in pixels
+        ax1.plot(
             x_valid,
-            f_mean_valid,
-            yerr=f_std_valid,
-            marker="o",
-            capsize=4,
-            capthick=1.5,
+            error_pixels,
+            "o-",
             linewidth=2,
-            color=self.colors[0],
             markersize=5,
+            color=self.colors[0],
             alpha=0.8,
         )
-        ax1.axhline(
-            y=f_gt,
-            color="red",
-            linestyle="--",
-            linewidth=2,
-            alpha=0.7,
-            label=f"Ground Truth ({f_gt:.0f})",
-        )
-        ax1.set_ylabel("Estimated Focal Length")
-        ax1.set_title("Focal Length Estimation vs Noise Level")
+        ax1.set_ylabel("Absolute Error (px)")
+        ax1.set_title("Focal Length Estimation Error vs Reprojection Error")
         ax1.grid(True, alpha=0.3)
-        ax1.legend()
 
-        # Bottom plot: Relative error
-        error_pct = self.stats["focal_length_error_pct"][valid_mask]
+        # Bottom plot: Relative error in percentage
         ax2.plot(
             x_valid,
             error_pct,
@@ -704,89 +649,45 @@ class Plotter:
             color=self.colors[1],
             alpha=0.8,
         )
-        ax2.set_xlabel("Noise Level (σ)")
-        ax2.set_ylabel("Absolute Error (%)")
-        ax2.set_title("Focal Length Estimation Error")
+        ax2.set_xlabel("Reprojection Error (px)")
+        ax2.set_ylabel("Relative Error (%)")
         ax2.grid(True, alpha=0.3)
 
         plt.tight_layout()
         plt.show()
 
-    def plot_pixel_errors(self):
-        """Plot pixel error statistics."""
-        fig, ax = plt.subplots(figsize=self.figsize)
-
-        noise_levels = self.stats["noise_levels"]
-        rms_errors = self.stats["pixel_error_rms"]
-        mean_errors = self.stats["pixel_error_mean"]
-
-        # Remove NaN values
-        valid_mask = ~np.isnan(rms_errors)
-        if not np.any(valid_mask):
-            print("Warning: No valid pixel error data to plot")
-            return
-
-        x_valid = noise_levels[valid_mask]
-
-        ax.plot(
-            x_valid,
-            rms_errors[valid_mask],
-            "o-",
-            label="RMS Error",
-            linewidth=2,
-            markersize=5,
-            color=self.colors[0],
-            alpha=0.8,
-        )
-        ax.plot(
-            x_valid,
-            mean_errors[valid_mask],
-            "s-",
-            label="Mean Error",
-            linewidth=2,
-            markersize=5,
-            color=self.colors[1],
-            alpha=0.8,
-        )
-
-        ax.set_xlabel("Noise Level (σ)")
-        ax.set_ylabel("Reprojection Error (px)")
-        ax.set_title("Reprojection Error vs Noise Level")
-        ax.grid(True, alpha=0.3)
-        ax.legend()
-
-        plt.tight_layout()
-        plt.show()
-
     def plot_distance_errors(self):
-        """Plot mean distance error percentages vs noise level (with std shading)."""
+        """Plot mean distance error percentages vs reprojection error (with std shading)."""
         fig, ax = plt.subplots(figsize=self.figsize)
 
         noise_levels = sorted(self.results.distance_estimates.keys())
         distance_gt = np.array(self.dataset.distances)
+        pixel_rms = self.stats["pixel_error_rms"]
 
         mean_errors = []
         std_errors = []
+        x_values = []
 
-        for sigma in noise_levels:
+        for i, sigma in enumerate(noise_levels):
             estimates = np.array(self.results.distance_estimates[sigma])
 
-            # Ensure lengths match
-            if len(estimates) != len(distance_gt):
-                print(f"Warning: mismatch in length for sigma={sigma}")
+            # Ensure lengths match and we have valid pixel error data
+            if len(estimates) != len(distance_gt) or np.isnan(pixel_rms[i]):
+                print(f"Warning: mismatch in length or invalid data for sigma={sigma}")
                 continue
 
             errors_pct = np.abs(estimates - distance_gt) / distance_gt * 100
             mean_errors.append(np.nanmean(errors_pct))
             std_errors.append(np.nanstd(errors_pct))
+            x_values.append(pixel_rms[i])
 
-        noise_levels = np.array(noise_levels)
+        x_values = np.array(x_values)
         mean_errors = np.array(mean_errors)
         std_errors = np.array(std_errors)
 
         # Plot mean line
         ax.plot(
-            noise_levels,
+            x_values,
             mean_errors,
             "o-",
             linewidth=2,
@@ -798,16 +699,16 @@ class Plotter:
 
         # Shaded error band (std)
         ax.fill_between(
-            noise_levels,
+            x_values,
             np.maximum(mean_errors - std_errors, 0),
             mean_errors + std_errors,
             color=self.colors[0],
             alpha=0.2,
         )
 
-        ax.set_xlabel("Noise Level (σ)", fontsize=14)
-        ax.set_ylabel("Distance Error (%)", fontsize=14)
-        ax.set_title("Mean Distance Error vs Noise Level", fontsize=16)
+        ax.set_xlabel("Reprojection Error (px)")
+        ax.set_ylabel("Distance Error (%)")
+        ax.set_title("Mean Distance Error vs Reprojection Error")
         ax.grid(True, alpha=0.3)
         ax.legend()
 
@@ -815,34 +716,37 @@ class Plotter:
         plt.show()
 
     def plot_angle_errors(self):
-        """Plot mean angle error percentages vs noise level (with std shading, clipped at 0)."""
+        """Plot mean angle error percentages vs reprojection error (with std shading, clipped at 0)."""
         fig, ax = plt.subplots(figsize=self.figsize)
 
         noise_levels = sorted(self.results.angle_estimates.keys())
         angle_gt = np.array(self.dataset.angles)
+        pixel_rms = self.stats["pixel_error_rms"]
 
         mean_errors = []
         std_errors = []
+        x_values = []
 
-        for sigma in noise_levels:
+        for i, sigma in enumerate(noise_levels):
             estimates = np.array(self.results.angle_estimates[sigma])
 
-            # Ensure lengths match
-            if len(estimates) != len(angle_gt):
-                print(f"Warning: mismatch in length for sigma={sigma}")
+            # Ensure lengths match and we have valid pixel error data
+            if len(estimates) != len(angle_gt) or np.isnan(pixel_rms[i]):
+                print(f"Warning: mismatch in length or invalid data for sigma={sigma}")
                 continue
 
             errors_pct = np.abs(estimates - angle_gt) / angle_gt * 100
             mean_errors.append(np.nanmean(errors_pct))
             std_errors.append(np.nanstd(errors_pct))
+            x_values.append(pixel_rms[i])
 
-        noise_levels = np.array(noise_levels)
+        x_values = np.array(x_values)
         mean_errors = np.array(mean_errors)
         std_errors = np.array(std_errors)
 
         # Plot mean line
         ax.plot(
-            noise_levels,
+            x_values,
             mean_errors,
             "o-",
             linewidth=2,
@@ -854,16 +758,16 @@ class Plotter:
 
         # Shaded error band with lower bound clipped at 0
         ax.fill_between(
-            noise_levels,
+            x_values,
             np.maximum(mean_errors - std_errors, 0),
             mean_errors + std_errors,
             color=self.colors[1],
             alpha=0.2,
         )
 
-        ax.set_xlabel("Noise Level (σ)", fontsize=14)
-        ax.set_ylabel("Angle Error (%)", fontsize=14)
-        ax.set_title("Mean Angle Error vs Noise Level", fontsize=16)
+        ax.set_xlabel("Reprojection Error (px)")
+        ax.set_ylabel("Angle Error (%)")
+        ax.set_title("Mean Angle Error vs Reprojection Error")
         ax.grid(True, alpha=0.3)
         ax.legend()
 
@@ -877,7 +781,6 @@ class Plotter:
         try:
             # Generate and save each plot
             self._save_focal_length(dpi)
-            self._save_pixel_errors(dpi)
             self._save_distance_errors(dpi)
             self._save_angle_errors(dpi)
 
@@ -885,50 +788,42 @@ class Plotter:
             plt.ion()  # Turn interactive mode back on
 
     def _save_focal_length(self, dpi):
-        """Save focal length plot with larger text sizes."""
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=self.figsize, height_ratios=[3, 2])
+        """Save focal length error plots (absolute px + relative %) vs reprojection error."""
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=self.figsize, height_ratios=[1, 1])
 
-        noise_levels = self.stats["noise_levels"]
+        pixel_rms = self.stats["pixel_error_rms"]
         f_mean = self.stats["focal_length_mean"]
-        f_std = self.stats["focal_length_std"]
         f_gt = self.dataset.K[0, 0]
 
-        valid_mask = ~np.isnan(f_mean)
+        valid_mask = ~np.isnan(f_mean) & ~np.isnan(pixel_rms)
         if not np.any(valid_mask):
             return
 
-        x_valid = noise_levels[valid_mask]
+        x_valid = pixel_rms[valid_mask]
         f_mean_valid = f_mean[valid_mask]
-        f_std_valid = f_std[valid_mask]
 
-        # First subplot: focal length with error bars
-        ax1.errorbar(
+        # Absolute error in pixels
+        error_pixels = np.abs(f_mean_valid - f_gt)
+
+        ax1.plot(
             x_valid,
-            f_mean_valid,
-            yerr=f_std_valid,
-            marker="o",
-            capsize=4,
-            capthick=1.5,
+            error_pixels,
+            "o-",
             linewidth=2,
-            color=self.colors[0],
             markersize=5,
+            color=self.colors[0],
             alpha=0.8,
+            label="Absolute Error",
         )
-        ax1.axhline(
-            y=f_gt,
-            color="red",
-            linestyle="--",
-            linewidth=2,
-            alpha=0.7,
-            label=f"Ground Truth ({f_gt:.0f})",
+        ax1.set_ylabel("Absolute Error (px)", fontsize=14)
+        ax1.set_title(
+            "Focal Length Estimation Error vs Reprojection Error", fontsize=16
         )
-        ax1.set_ylabel("Estimated Focal Length", fontsize=14)
-        ax1.set_title("Focal Length Estimation vs Noise Level", fontsize=16)
         ax1.grid(True, alpha=0.3)
         ax1.legend(fontsize=12)
         ax1.tick_params(axis="both", labelsize=12)
 
-        # Second subplot: focal length error
+        # Relative error in percentage
         error_pct = self.stats["focal_length_error_pct"][valid_mask]
         ax2.plot(
             x_valid,
@@ -938,87 +833,45 @@ class Plotter:
             markersize=5,
             color=self.colors[1],
             alpha=0.8,
+            label="Relative Error",
         )
-        ax2.set_xlabel("Noise Level (σ)", fontsize=14)
-        ax2.set_ylabel("Absolute Error (%)", fontsize=14)
-        ax2.set_title("Focal Length Estimation Error", fontsize=16)
+        ax2.set_xlabel("Reprojection Error (px)", fontsize=14)
+        ax2.set_ylabel("Relative Error (%)", fontsize=14)
         ax2.grid(True, alpha=0.3)
+        ax2.legend(fontsize=12)
         ax2.tick_params(axis="both", labelsize=12)
 
         plt.tight_layout()
         plt.savefig(self.output_dir / "focal_length.png", dpi=dpi, bbox_inches="tight")
         plt.close()
 
-    def _save_pixel_errors(self, dpi):
-        """Save pixel errors plot."""
-        fig, ax = plt.subplots(figsize=(6, 4))
-
-        noise_levels = self.stats["noise_levels"]
-        rms_errors = self.stats["pixel_error_rms"]
-        mean_errors = self.stats["pixel_error_mean"]
-
-        valid_mask = ~np.isnan(rms_errors)
-        if not np.any(valid_mask):
-            return
-
-        x_valid = noise_levels[valid_mask]
-
-        ax.plot(
-            x_valid,
-            rms_errors[valid_mask],
-            "o-",
-            label="RMS Error",
-            linewidth=2,
-            markersize=5,
-            color=self.colors[0],
-            alpha=0.8,
-        )
-        ax.plot(
-            x_valid,
-            mean_errors[valid_mask],
-            "s-",
-            label="Mean Error",
-            linewidth=2,
-            markersize=5,
-            color=self.colors[1],
-            alpha=0.8,
-        )
-
-        ax.set_xlabel("Noise Level (σ)", fontsize=14)
-        ax.set_ylabel("Reprojection Error (px)", fontsize=14)
-        ax.set_title("Reprojection Error vs Noise Level", fontsize=16)
-        ax.grid(True, alpha=0.3)
-        ax.tick_params(axis="both", labelsize=12)
-        ax.legend()
-
-        plt.tight_layout()
-        plt.savefig(self.output_dir / "pixel_errors.png", dpi=dpi, bbox_inches="tight")
-        plt.close()
-
     def _save_distance_errors(self, dpi):
-        """Save mean distance error vs noise level plot with shaded std deviation."""
-        fig, ax = plt.subplots(figsize=(6, 4))
+        """Save mean distance error vs reprojection error plot with shaded std deviation."""
+        fig, ax = plt.subplots(figsize=(6, 3))
 
         noise_levels = sorted(self.results.distance_estimates.keys())
         distance_gt = np.array(self.dataset.distances)
+        pixel_rms = self.stats["pixel_error_rms"]
 
         mean_errors = []
         std_errors = []
+        x_values = []
 
-        for sigma in noise_levels:
+        for i, sigma in enumerate(noise_levels):
             estimates = np.array(self.results.distance_estimates[sigma])
-            if len(estimates) != len(distance_gt):
+            if len(estimates) != len(distance_gt) or np.isnan(pixel_rms[i]):
                 continue
             errors_pct = np.abs(estimates - distance_gt) / distance_gt * 100
             mean_errors.append(np.nanmean(errors_pct))
             std_errors.append(np.nanstd(errors_pct))
+            x_values.append(pixel_rms[i])
 
-        noise_levels = np.array(noise_levels)
+        x_values = np.array(x_values)
         mean_errors = np.array(mean_errors)
         std_errors = np.array(std_errors)
 
         ax.plot(
-            noise_levels,
+            x_values,
             mean_errors,
             "o-",
             linewidth=2,
@@ -1031,12 +884,12 @@ class Plotter:
         lower_bound = np.maximum(mean_errors - std_errors, 0)
         upper_bound = mean_errors + std_errors
         ax.fill_between(
-            noise_levels, lower_bound, upper_bound, color=self.colors[0], alpha=0.2
+            x_values, lower_bound, upper_bound, color=self.colors[0], alpha=0.2
         )
 
-        ax.set_xlabel("Noise Level (σ)", fontsize=14)
+        ax.set_xlabel("Reprojection Error (px)", fontsize=14)
         ax.set_ylabel("Distance Error (%)", fontsize=14)
-        ax.set_title("Mean Distance Error vs Noise Level", fontsize=16)
+        ax.set_title("Mean Distance Error vs Reprojection Error", fontsize=16)
         ax.grid(True, alpha=0.3)
         ax.legend(fontsize=12)
 
@@ -1047,29 +900,32 @@ class Plotter:
         plt.close()
 
     def _save_angle_errors(self, dpi):
-        """Save mean angle error vs noise level plot with shaded std deviation."""
-        fig, ax = plt.subplots(figsize=(6, 4))
+        """Save mean angle error vs reprojection error plot with shaded std deviation."""
+        fig, ax = plt.subplots(figsize=(6, 3))
 
         noise_levels = sorted(self.results.angle_estimates.keys())
         angle_gt = np.array(self.dataset.angles)
+        pixel_rms = self.stats["pixel_error_rms"]
 
         mean_errors = []
         std_errors = []
+        x_values = []
 
-        for sigma in noise_levels:
+        for i, sigma in enumerate(noise_levels):
             estimates = np.array(self.results.angle_estimates[sigma])
-            if len(estimates) != len(angle_gt):
+            if len(estimates) != len(angle_gt) or np.isnan(pixel_rms[i]):
                 continue
             errors_pct = np.abs(estimates - angle_gt) / angle_gt * 100
             mean_errors.append(np.nanmean(errors_pct))
             std_errors.append(np.nanstd(errors_pct))
+            x_values.append(pixel_rms[i])
 
-        noise_levels = np.array(noise_levels)
+        x_values = np.array(x_values)
         mean_errors = np.array(mean_errors)
         std_errors = np.array(std_errors)
 
         ax.plot(
-            noise_levels,
+            x_values,
             mean_errors,
             "o-",
             linewidth=2,
@@ -1082,12 +938,12 @@ class Plotter:
         lower_bound = np.maximum(mean_errors - std_errors, 0)
         upper_bound = mean_errors + std_errors
         ax.fill_between(
-            noise_levels, lower_bound, upper_bound, color=self.colors[1], alpha=0.2
+            x_values, lower_bound, upper_bound, color=self.colors[1], alpha=0.2
         )
 
-        ax.set_xlabel("Noise Level (σ)", fontsize=14)
+        ax.set_xlabel("Reprojection Error (px)", fontsize=14)
         ax.set_ylabel("Angle Error (%)", fontsize=14)
-        ax.set_title("Mean Angle Error vs Noise Level", fontsize=16)
+        ax.set_title("Mean Angle Error vs Reprojection Error", fontsize=16)
         ax.grid(True, alpha=0.3)
         ax.legend(fontsize=12)
 

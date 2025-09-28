@@ -18,7 +18,9 @@ InlierMask = NDArray[np.uint8]
 
 
 def extract_features(
-    image: ImageArray, method: Literal["SIFT", "ORB"] = "SIFT"
+    image: ImageArray,
+    method: Literal["SIFT", "ORB"] = "SIFT",
+    max_features: int | None = None,
 ) -> tuple[KeypointList, DescriptorArray | None]:
     """
     Detect keypoints and compute descriptors from an input image.
@@ -32,6 +34,11 @@ def extract_features(
         method: Feature detection method to use. Options:
             - "SIFT": Scale-Invariant Feature Transform (float32 descriptors)
             - "ORB": Oriented FAST and Rotated BRIEF (binary descriptors)
+        max_features: Optional maximum number of features to extract. If None:
+            - SIFT: Uses OpenCV default (unlimited, but practically limited by image)
+            - ORB: Uses 2000 (function default)
+            If specified, limits keypoints to prevent OpenCV matcher overflow.
+            Recommended: ≤200,000 to stay under OpenCV's 262,144 descriptor limit.
 
     Returns:
         A tuple containing:
@@ -46,7 +53,7 @@ def extract_features(
     Example:
         >>> image = cv2.imread('image.jpg')
         >>> image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        >>> keypoints, descriptors = extract_features(image_rgb, method="SIFT")
+        >>> keypoints, descriptors = extract_features(image_rgb, method="SIFT", max_features=10000)
         >>> print(f"Found {len(keypoints)} keypoints")
     """
     # Convert RGB image to grayscale for feature detection
@@ -56,10 +63,14 @@ def extract_features(
     # Initialize the appropriate feature detector based on method
     if method == "SIFT":
         # Produces float32 descriptors of length 128
-        detector = cv2.SIFT_create()
+        if max_features is not None:
+            detector = cv2.SIFT_create(nfeatures=max_features)
+        else:
+            detector = cv2.SIFT_create()
     elif method == "ORB":
         # Produces binary descriptors, limit to 2000 features for performance
-        detector = cv2.ORB_create(nfeatures=2000)
+        n_features = max_features if max_features is not None else 2000
+        detector = cv2.ORB_create(nfeatures=n_features)
     else:
         raise ValueError(f"Unsupported feature detection method: {method}")
 

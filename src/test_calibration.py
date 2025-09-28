@@ -152,8 +152,8 @@ class SyntheticDataGenerator:
         print("=" * 60)
 
         print(f"Number of homographies: {dataset.n_homographies}")
-        print(f"Camera focal length: {dataset.K[0,0]:.1f}")
-        print(f"Principal point: ({dataset.K[0,2]:.1f}, {dataset.K[1,2]:.1f})")
+        print(f"Camera focal length: {dataset.K[0, 0]:.1f}")
+        print(f"Principal point: ({dataset.K[0, 2]:.1f}, {dataset.K[1, 2]:.1f})")
 
         print("Scene Statistics")
         print(
@@ -235,7 +235,7 @@ class Analyzer:
         # Process each noise level
         for i, sigma in enumerate(self.noise_levels):
             print(
-                f"\nProcessing noise level σ = {sigma:.3f} ({i+1}/{len(self.noise_levels)})"
+                f"\nProcessing noise level σ = {sigma:.3f} ({i + 1}/{len(self.noise_levels)})"
             )
             print("-" * 40)
 
@@ -735,7 +735,7 @@ class Plotter:
                 print(f"Warning: mismatch in length or invalid data for sigma={sigma}")
                 continue
 
-            errors_pct = np.abs(estimates - angle_gt) / angle_gt * 100
+            errors_pct = np.abs(estimates - angle_gt)
             mean_errors.append(np.nanmean(errors_pct))
             std_errors.append(np.nanstd(errors_pct))
             x_values.append(pixel_rms[i])
@@ -753,7 +753,7 @@ class Plotter:
             markersize=5,
             color=self.colors[1],  # different color from distance for clarity
             alpha=0.9,
-            label="Angle Error (mean ± std)",
+            label="Angle Error (mean ± 1 std)",
         )
 
         # Shaded error band with lower bound clipped at 0
@@ -766,7 +766,8 @@ class Plotter:
         )
 
         ax.set_xlabel("Reprojection Error (px)")
-        ax.set_ylabel("Angle Error (%)")
+        # ax.set_ylabel("Angle Error (%)")
+        ax.set_ylabel("Angle Error (°)")
         ax.set_title("Mean Angle Error vs Reprojection Error")
         ax.grid(True, alpha=0.3)
         ax.legend()
@@ -878,7 +879,7 @@ class Plotter:
             markersize=5,
             color=self.colors[0],
             alpha=0.9,
-            label="Distance Error (mean ± std)",
+            label="Distance Error (mean ± 1 std)",
         )
 
         lower_bound = np.maximum(mean_errors - std_errors, 0)
@@ -915,9 +916,9 @@ class Plotter:
             estimates = np.array(self.results.angle_estimates[sigma])
             if len(estimates) != len(angle_gt) or np.isnan(pixel_rms[i]):
                 continue
-            errors_pct = np.abs(estimates - angle_gt) / angle_gt * 100
-            mean_errors.append(np.nanmean(errors_pct))
-            std_errors.append(np.nanstd(errors_pct))
+            errors = np.abs(estimates - angle_gt)
+            mean_errors.append(np.nanmean(errors))
+            std_errors.append(np.nanstd(errors))
             x_values.append(pixel_rms[i])
 
         x_values = np.array(x_values)
@@ -932,7 +933,7 @@ class Plotter:
             markersize=5,
             color=self.colors[1],
             alpha=0.9,
-            label="Angle Error (mean ± std)",
+            label="Angle Error (mean ± 1 std)",
         )
 
         lower_bound = np.maximum(mean_errors - std_errors, 0)
@@ -942,7 +943,7 @@ class Plotter:
         )
 
         ax.set_xlabel("Reprojection Error (px)", fontsize=14)
-        ax.set_ylabel("Angle Error (%)", fontsize=14)
+        ax.set_ylabel("Angle Error (°)", fontsize=14)
         ax.set_title("Mean Angle Error vs Reprojection Error", fontsize=16)
         ax.grid(True, alpha=0.3)
         ax.legend(fontsize=12)

@@ -31,6 +31,12 @@ templates:
     width: 167.0
     height: 240.0
 
+  - id: T5
+    label: "Deep Learning"
+    path: "assets/templates/template_05.jpg"
+    width: 173.0
+    height: 260.0
+
 scenes:
   - id: S0
     label: "Frontal Bookmark"

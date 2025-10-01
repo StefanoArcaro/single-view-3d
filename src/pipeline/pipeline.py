@@ -3,7 +3,7 @@ from src.configs.render_config import RenderConfig
 from src.configs.render_data import RenderData
 from src.models.measurements import Measurements
 from src.pipeline.analysis import analyze_scene
-from src.pipeline.calibration import CalibrationSimple
+from src.pipeline.calibration import CalibrationSimple, refine_calibration
 from src.pipeline.matching import multi_template_match
 
 
@@ -44,7 +44,16 @@ def run_pipeline(
     calibration = CalibrationSimple()
     calibration.add_homographies(homographies)
     principal_point = (image_size[0] / 2, image_size[1] / 2)
-    K = calibration.calibrate(principal_point=principal_point)
+    K_init = calibration.calibrate(principal_point=principal_point)
+
+    # Refine calibration
+    K, _ = refine_calibration(
+        templates=templates,
+        homographies=homographies,
+        image_size=image_size,
+        K_init=K_init,
+        resolution=20,
+    )
 
     # Scene analysis
     render_data, analysis_data = analyze_scene(

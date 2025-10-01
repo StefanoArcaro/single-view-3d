@@ -1,16 +1,15 @@
 import os
 import sys
-from pathlib import Path
 
-from PIL import Image
 import streamlit as st
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from src.configs.render_config import RenderConfig
-from src.pipeline.pipeline import run_pipeline
-from src.utils import find_project_root, load_measurements_from_yaml
 from src.models.measurements import Measurements
+from src.pipeline.pipeline import run_pipeline
+from src.rendering.renderer import Renderer
+from src.utils import find_project_root, load_measurements_from_yaml, load_rgb
 
 PROJECT_ROOT = find_project_root()
 
@@ -78,11 +77,11 @@ with col1:
 
         scene_path = PROJECT_ROOT / scene.path
         if scene_path.exists():
-            scene_image = Image.open(scene_path)
+            scene_image = load_rgb(scene_path)
             st.image(
                 scene_image,
                 caption=f"Scene: {selected_scene_id}",
-                use_container_width=True,
+                width="content",
             )
         else:
             st.warning(f"Scene image not found: {scene_path}")
@@ -102,13 +101,13 @@ with col1:
                     if not template:
                         continue
 
-                    template_path = Path("assets") / template.path
+                    template_path = PROJECT_ROOT / template.path
                     if template_path.exists():
-                        template_image = Image.open(template_path)
+                        template_image = load_rgb(template_path)
                         st.image(
                             template_image,
                             caption=template.id,
-                            use_container_width=True,
+                            width="content",
                         )
 
                     if template.width and template.height:
@@ -146,7 +145,7 @@ with col2:
 
     st.markdown("---")
 
-    if st.button("🚀 Run Pipeline", type="primary", use_container_width=True):
+    if st.button("🚀 Run Pipeline", type="primary", width="content"):
         if not selected_scene_id:
             st.error("Please select a scene first")
         else:
@@ -169,6 +168,10 @@ with col2:
 
                     st.success("Pipeline completed successfully!")
                     st.info("Navigate to **3D Viewer** to see results")
+
+                    # Run the renderer
+                    renderer = Renderer(render_data, analysis_data)
+                    renderer._generate_html()
 
                 except Exception as e:
                     st.error(f"Pipeline failed: {e}")

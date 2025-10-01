@@ -23,7 +23,7 @@ class TemplateAnalysisData:
         """Relative error if ground-truth is available."""
         if self.distance_true is None or self.distance_true == 0:
             return None
-        return self.error_abs / self.distance_true
+        return 100 * self.error_abs / self.distance_true
 
 
 @dataclass

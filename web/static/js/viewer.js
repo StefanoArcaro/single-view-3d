@@ -14,6 +14,9 @@ function initViewer(meshesData, linesData, templateMetadata, templateResults) {
     metadata = templateMetadata;
     results = templateResults;
 
+    // Display scene info
+    displaySceneInfo();
+
     setupScene();
     setupLighting();
     
@@ -35,6 +38,19 @@ function initViewer(meshesData, linesData, templateMetadata, templateResults) {
     
     // Handle window resize
     window.addEventListener('resize', onWindowResize);
+}
+
+function displaySceneInfo() {
+    if (metadata.scene_id) {
+        document.getElementById('sceneId').textContent = metadata.scene_id;
+    }
+    if (metadata.units) {
+        document.getElementById('sceneUnits').textContent = metadata.units;
+    }
+    if (metadata.image_size) {
+        document.getElementById('sceneImageSize').textContent = 
+            `${metadata.image_size.width} × ${metadata.image_size.height}`;
+    }
 }
 
 function setupScene() {
@@ -88,8 +104,6 @@ function createMeshes(meshesData) {
     // Update global variables
     maxDistance = globalMaxDistance;
     minDistance = globalMinDistance;
-    
-    console.log(`Global - Max Distance: ${maxDistance}, Min Distance: ${minDistance}`);
     
     // Create all meshes
     allDistances.forEach(({ geometry, vertices, indices, distances, meshData }, index) => {
@@ -254,21 +268,30 @@ function selectTemplate(templateId) {
     });
 
     // Update info panel
-    const data = metadata[templateId];
+    const templateData = metadata.templates[templateId];
     const result = results[templateId];
     
     document.getElementById('templateId').textContent = templateId;
-    document.getElementById('templateLabel').textContent = data?.label || 'N/A';
+    document.getElementById('templateLabel').textContent = templateData?.label || 'N/A';
     document.getElementById('templateDimensions').textContent = 
-        (data?.width && data?.height) ? `${data.width} x ${data.height}` : 'N/A';
+        (templateData?.width && templateData?.height) 
+            ? `${templateData.width.toFixed(1)} × ${templateData.height.toFixed(1)}` 
+            : 'N/A';
+    
+    // Handle predicted distance
     document.getElementById('templateDistancePred').textContent = 
-        result?.distance_pred?.toFixed(2) || 'N/A';
-    document.getElementById('templateDistanceTrue').textContent = 
-        result?.distance_true?.toFixed(2) || 'N/A';
-    document.getElementById('templateError').textContent = 
-        result?.error?.toFixed(2) || 'N/A';
-    document.getElementById('templateErrorPercent').textContent = 
-        result?.error_percent?.toFixed(2) + '%' || 'N/A';
+        result?.distance_pred ? result.distance_pred.toFixed(2) : 'N/A';
+    
+    // Handle ground truth and errors (may not exist)
+    if (result?.distance_true !== undefined) {
+        document.getElementById('templateDistanceTrue').textContent = result.distance_true.toFixed(2);
+        document.getElementById('templateError').textContent = result.error_abs.toFixed(2);
+        document.getElementById('templateErrorPercent').textContent = `${result.error_rel.toFixed(2)}%`;
+    } else {
+        document.getElementById('templateDistanceTrue').textContent = 'N/A';
+        document.getElementById('templateError').textContent = 'N/A';
+        document.getElementById('templateErrorPercent').textContent = 'N/A';
+    }
 
     // Display the info panel
     document.getElementById('templateDetailsPanel').style.display = 'block';

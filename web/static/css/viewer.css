@@ -170,10 +170,17 @@ canvas {
     font-weight: 500;
 }
 
+/* Scene Information Panel */
+#sceneInfoPanel {
+    position: absolute;
+    top: 0.625rem;
+    right: 0.625rem;
+}
+
 /* Template Details Panel */
 #templateDetailsPanel {
     position: absolute;
-    top: 0.625rem;
+    top: 13rem;
     right: 0.625rem;
     display: none;
 }

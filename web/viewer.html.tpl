@@ -35,6 +35,15 @@
         </div>
     </div>
 
+    <div id="sceneInfoPanel" class="ui-panel">
+        <h3>Scene Information</h3>
+        <div class="info-group">
+            <div class="info-row">Scene ID <span id="sceneId">-</span></div>
+            <div class="info-row">Units <span id="sceneUnits">-</span></div>
+            <div class="info-row">Image Size <span id="sceneImageSize">-</span></div>
+        </div>
+    </div>
+
     <div id="templateDetailsPanel" class="ui-panel">
         <h3>Template Information</h3>
         <h4>Details</h4>

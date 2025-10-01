@@ -1,4 +1,7 @@
+import cv2
 import numpy as np
+
+from src.models.template import Template
 
 
 class CalibrationSimple:
@@ -152,3 +155,83 @@ class CalibrationSimple:
             Number of homographies
         """
         return len(self.homographies)
+
+
+def refine_calibration(
+    templates: list[Template],
+    homographies: list[np.ndarray],
+    image_size: np.ndarray,
+    K_init: np.ndarray,
+    resolution: int = 20,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Refine the camera intrinsics and estimate radial distortion parameters (k1, k2).
+
+    Args:
+        templates (list[Template]): List of template objects containing metric dimensions.
+        homographies (list[np.ndarray]): List of homographies for the scene.
+        image_size (np.ndarray): Size of the image (width, height).
+        K_init (np.ndarray): Initial intrinsic matrix (3x3).
+        resolution (int): Resolution for the grid of points used for each template.
+
+    Returns:
+        tuple: Refined intrinsic matrix (3x3) and radial distortion parameters (1D array).
+    """
+    # Define the world points and the corresponding image points for each template
+    object_points = []
+    image_points = []
+    for template, H in zip(templates, homographies):
+        # Get template metric dimensions
+        w, h = template.width, template.height
+
+        # Define grid points on the template
+        x = np.linspace(0, w, resolution)
+        y = np.linspace(0, h, resolution)
+        X, Y = np.meshgrid(x, y)
+
+        # Create world points
+        object_points_3d = np.array(
+            [[x, y, 0] for x, y in zip(X.flatten(), Y.flatten())], dtype=np.float32
+        )
+
+        # Create image points
+        image_points_2d = cv2.perspectiveTransform(
+            object_points_3d[:, :2].reshape(-1, 1, 2), H
+        ).reshape(-1, 2)
+
+        # Add these points to the lists
+        object_points.append(object_points_3d)
+        image_points.append(image_points_2d)
+
+    # Initialize the distortion coefficients to zero
+    dist_coeffs_init = np.zeros(5, dtype=np.float32)
+
+    # Define the flags for the optimization
+    flags = (
+        cv2.CALIB_USE_INTRINSIC_GUESS
+        | cv2.CALIB_FIX_PRINCIPAL_POINT
+        | cv2.CALIB_FIX_ASPECT_RATIO
+        | cv2.CALIB_ZERO_TANGENT_DIST
+        | cv2.CALIB_FIX_K3
+        | cv2.CALIB_FIX_K4
+        | cv2.CALIB_FIX_K5
+        | cv2.CALIB_FIX_K6
+    )
+
+    # Refine the intrinsic parameters and distortion coefficients
+    ret, K, dist_coeffs, rvecs, tvecs = cv2.calibrateCamera(
+        objectPoints=object_points,
+        imagePoints=image_points,
+        imageSize=image_size,
+        cameraMatrix=K_init,
+        distCoeffs=dist_coeffs_init,
+        flags=flags,
+    )
+
+    if not ret:
+        raise RuntimeError(
+            "Camera calibration failed. Check the input data and parameters."
+        )
+
+    # Return the refined intrinsic matrix and distortion coefficients
+    return K, dist_coeffs[:2]

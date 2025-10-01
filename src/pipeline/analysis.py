@@ -96,8 +96,8 @@ def analyze_scene(
     render_data = RenderData(
         scene_id=scene.id,
         original_units=original_units,
-        image_width=image_size[0],
-        image_height=image_size[1],
+        image_width=image_size[1],
+        image_height=image_size[0],
         K=K,
         templates=render_templates,
     )

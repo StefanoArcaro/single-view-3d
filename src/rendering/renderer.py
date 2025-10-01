@@ -1,11 +1,11 @@
+import base64
 import json
-import os
 import subprocess
 import webbrowser
-from pathlib import Path
 
 import numpy as np
 
+from src.configs.analysis_data import AnalysisData
 from src.configs.render_config import RenderConfig
 from src.configs.render_data import RenderData
 from src.utils import find_project_root
@@ -24,6 +24,7 @@ class Renderer:
     def __init__(
         self,
         render_data: RenderData,
+        analysis_data: AnalysisData,
         render_config: RenderConfig | None = None,
         html_template_path: str | None = None,
         output_path: str | None = None,
@@ -34,12 +35,14 @@ class Renderer:
 
         Args:
             render_data: RenderData object from the pipeline.
+            analysis_data: AnalysisData object from the pipeline.
             render_config: Rendering configuration.
             html_template_path: Path to HTML template file (default if None).
             output_path: Path to save final HTML file (default if None).
             port: Port for local web server.
         """
         self.render_data = render_data
+        self.analysis_data = analysis_data
         self.render_config = render_config if render_config else RenderConfig()
         self.port = port
 
@@ -48,14 +51,62 @@ class Renderer:
 
         # Set default paths relative to the project root
         if html_template_path is None:
-            html_template_path = os.path.join(
-                self.project_root, "web", "viewer.html.tpl"
-            )
+            html_template_path = self.project_root / "web" / "viewer.html.tpl"
         if output_path is None:
-            output_path = os.path.join(self.project_root, "web", "viewer.html")
+            output_path = self.project_root / "web" / "viewer.html"
 
-        self.html_template_path = Path(html_template_path)
-        self.output_path = Path(output_path)
+        self.html_template_path = html_template_path
+        self.output_path = output_path
+
+    def _encode_texture_to_base64(self, texture_path: str) -> str:
+        """
+        Encode a texture image to a base64 data URI.
+
+        Args:
+            texture_path: Path to the texture file (can be relative or absolute).
+
+        Returns:
+            Base64-encoded data URI string (e.g., "data:image/jpeg;base64,...")
+        """
+        # Convert to Path object and resolve from project root
+        texture_full_path = self.project_root / texture_path
+
+        try:
+            # Read and encode image
+            with open(texture_full_path, "rb") as img_file:
+                img_data = base64.b64encode(img_file.read()).decode("utf-8")
+
+                # Determine MIME type from file extension
+                suffix = texture_full_path.suffix.lower()
+                mime_type = {
+                    ".jpg": "jpeg",
+                    ".jpeg": "jpeg",
+                    ".png": "png",
+                    ".gif": "gif",
+                    ".webp": "webp",
+                    ".bmp": "bmp",
+                }.get(suffix, "jpeg")
+
+                data_uri = f"data:image/{mime_type};base64,{img_data}"
+                return data_uri
+
+        except FileNotFoundError:
+            print(f"Texture not found at {texture_full_path}")
+            return self._get_placeholder_texture()
+        except Exception as e:
+            print(f"Error loading texture {texture_full_path}: {e}")
+            return self._get_placeholder_texture()
+
+    def _get_placeholder_texture(self) -> str:
+        """
+        Return a placeholder texture (1x1 pink pixel) as a data URI.
+
+        Returns:
+            Base64-encoded PNG data URI.
+        """
+        # 1x1 pink pixel PNG
+        placeholder_data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+        return f"data:image/png;base64,{placeholder_data}"
 
     def _generate_meshes_data(self) -> list[dict]:
         """Generate mesh data for all templates."""
@@ -67,7 +118,7 @@ class Renderer:
                     "id": template.id,
                     "vertices": template.corners_camera.tolist(),
                     "triangles": [[0, 2, 1], [0, 3, 2]],
-                    "texture": os.path.join("..", template.texture_path),
+                    "texture": self._encode_texture_to_base64(template.texture_path),
                 }
             )
 
@@ -172,6 +223,35 @@ class Renderer:
             },
         }
 
+    def _generate_results(self) -> dict:
+        """
+        Generate results data for templates from AnalysisData.
+
+        Returns a dict with template IDs as keys, containing:
+        - distance_pred: Predicted distance
+        - distance_true: Ground truth distance (if available)
+        - error_abs: Absolute error (if ground truth available)
+        - error_rel: Relative error as percentage (if ground truth available)
+        """
+        if self.analysis_data is None:
+            return {}
+
+        results = {}
+        for template_analysis in self.analysis_data.templates:
+            result = {
+                "distance_pred": template_analysis.distance_pred,
+            }
+
+            # Add ground truth and errors if available
+            if template_analysis.distance_true is not None:
+                result["distance_true"] = template_analysis.distance_true
+                result["error_abs"] = template_analysis.error_abs
+                result["error_rel"] = template_analysis.error_rel
+
+            results[template_analysis.id] = result
+
+        return results
+
     def _generate_html(self) -> str:
         """Generate the HTML visualization file."""
         # Load template
@@ -182,6 +262,7 @@ class Renderer:
         meshes = self._generate_meshes_data()
         lines = self._generate_lines_data()
         metadata = self._generate_metadata()
+        results = self._generate_results()
 
         # Substitute placeholders
         html_content = html_template.replace(
@@ -193,6 +274,13 @@ class Renderer:
         html_content = html_content.replace(
             "{ metadata_json }", json.dumps(metadata, indent=2)
         )
+        html_content = html_content.replace(
+            "{ results_json }", json.dumps(results, indent=2)
+        )
+
+        # Save the file
+        with open(self.output_path, "w", encoding="utf-8") as f:
+            f.write(html_content)
 
     def show(self) -> None:
         """Start local server and open visualization in browser."""

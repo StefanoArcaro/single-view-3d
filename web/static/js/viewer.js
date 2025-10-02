@@ -65,7 +65,7 @@ function setupScene() {
     document.body.appendChild(renderer.domElement);
     
     // Position camera
-    camera.position.set(0.5, 0.5, -1.2);
+    camera.position.set(0.2, 0.2, -0.7);
     camera.lookAt(0, 0, 0);
 }
 

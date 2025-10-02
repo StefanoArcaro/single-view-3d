@@ -15,6 +15,17 @@ st.set_page_config(
     layout="wide",
 )
 
+# Check pipeline state before rendering viewer
+if st.session_state.get("pipeline_error"):
+    st.error("⚠️ Pipeline failed. Please fix the error and rerun from the Setup page.")
+    st.stop()
+
+if not st.session_state.get("pipeline_run", False):
+    st.info(
+        "ℹ️ No pipeline results available. Please run the pipeline from the Setup page."
+    )
+    st.stop()
+
 PROJECT_ROOT = find_project_root()
 
 HTML_PATH = PROJECT_ROOT / "web" / "viewer.html"

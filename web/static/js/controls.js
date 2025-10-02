@@ -90,7 +90,7 @@ class CameraControls {
     
     handleWheel(event) {
         this.cameraDistance *= (1 + event.deltaY * 0.001);
-        this.cameraDistance = Math.max(1, Math.min(100, this.cameraDistance));
+        this.cameraDistance = Math.max(0.1, Math.min(5, this.cameraDistance));
         this.updateCameraPosition();
     }
     

@@ -43,7 +43,7 @@ def run_pipeline(
     # Camera calibration
     calibration = CalibrationSimple()
     calibration.add_homographies(homographies)
-    principal_point = (image_size[0] / 2, image_size[1] / 2)
+    principal_point = (image_size[1] / 2, image_size[0] / 2)
     K_init = calibration.calibrate(principal_point=principal_point)
 
     # Refine calibration

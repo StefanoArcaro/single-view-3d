@@ -60,10 +60,12 @@ function setupScene() {
     
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setClearColor(0x000000);
+    // renderer.setClearColor(0x0e1117);
+    // renderer.setClearColor(0x08090d);
     document.body.appendChild(renderer.domElement);
     
     // Position camera
-    camera.position.set(3, 3, -10);
+    camera.position.set(0.5, 0.5, -1.2);
     camera.lookAt(0, 0, 0);
 }
 

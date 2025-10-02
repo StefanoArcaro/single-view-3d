@@ -7,8 +7,8 @@ class RenderConfig:
 
     canonical_units: str = "m"
     frustum_near: float = 0.1
-    frustum_far: float = 10.0
-    axes_length: float = 1.0
+    frustum_far: float = 1.0
+    axes_length: float = 0.3
     frustum_color: tuple = (0.8, 0.8, 0.8)
 
     # Unit conversion factors

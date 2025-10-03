@@ -9,26 +9,31 @@ st.set_page_config(
 )
 
 # Page content
-st.title("📐 Single-view 3D Reconstruction from Planar Templates")
+st.title("📐 Single-View 3D Reconstruction from Planar Templates")
 st.markdown("---")
 
 # Brief Introduction
 st.header("Introduction")
 
 st.markdown("""
-This demonstration showcases an automated pipeline for estimating 3D camera poses from 2D images 
-using planar template matching and homography decomposition. The system:
+This application demonstrates an automated pipeline for **partial 3D scene reconstruction** 
+from single 2D images using planar template matching and homography decomposition.
 
-- Detects and matches planar templates (objects with known metric dimensions) in scene images
-- Computes homography transformations relating template coordinates to image coordinates  
-- Decomposes homographies to recover full 6-DOF camera poses (rotation and translation)
-- Calibrates camera intrinsic parameters from multiple template observations
-- Estimates distances from camera to templates in metric units
+**Key capabilities:**
+- Detect and match planar objects with known metric dimensions
+- Reconstruct their 3D positions and orientations in the scene
+- Recover camera pose relative to the templates
+- Visualize the partial 3D reconstruction interactively
 
-This approach is fundamental to applications in augmented reality, robotics, photogrammetry, 
-and structure-from-motion systems.
+The reconstruction is partial because only the planar templates present in the scene are 
+reconstructed metrically. This can however provide a metric anchor for the entire scene.
 """)
 
-st.info(
-    "👉 Navigate through the pages in the sidebar to run the pipeline on example scenes."
-)
+st.markdown("##### How to Use")
+st.markdown("""
+1. **Setup** — Select a scene, configure display settings, and run the pipeline
+2. **3D Viewer** — Explore the reconstructed 3D scene with interactive controls
+3. **Analysis** — Review accuracy metrics and per-template results
+""")
+
+st.info("👉 Navigate to **Setup** in the sidebar to begin with example scenes.")

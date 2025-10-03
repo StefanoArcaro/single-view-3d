@@ -60,8 +60,6 @@ function setupScene() {
     
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setClearColor(0x000000);
-    // renderer.setClearColor(0x0e1117);
-    // renderer.setClearColor(0x08090d);
     document.body.appendChild(renderer.domElement);
     
     // Position camera
@@ -86,7 +84,7 @@ function createMeshes(meshesData) {
     // Store distances for each mesh
     const allDistances = [];
     
-    meshesData.forEach((meshData, index) => {
+    meshesData.forEach((meshData) => {
         const geometry = new THREE.BufferGeometry();
         const vertices = new Float32Array(meshData.vertices.flat());
         const indices = new Uint16Array(meshData.triangles.flat());
@@ -108,7 +106,7 @@ function createMeshes(meshesData) {
     minDistance = globalMinDistance;
     
     // Create all meshes
-    allDistances.forEach(({ geometry, vertices, indices, distances, meshData }, index) => {
+    allDistances.forEach(({ geometry, vertices, indices, distances, meshData }) => {
         geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
         geometry.setIndex(new THREE.BufferAttribute(indices, 1));
         geometry.computeVertexNormals();
@@ -134,7 +132,7 @@ function createMeshes(meshesData) {
                 const material = new THREE.ShaderMaterial({
                     uniforms: {
                         texture1: { value: texture },
-                        backColor: { value: new THREE.Color(0xff0000) },
+                        backColor: { value: new THREE.Color(0xf1ffc4) },
                         maxDistance: { value: maxDistance },
                         minDistance: { value: minDistance },
                         useDistanceMode: { value: false },

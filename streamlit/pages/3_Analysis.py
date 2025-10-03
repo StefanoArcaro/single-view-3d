@@ -1,38 +1,50 @@
 import base64
+import os
+import sys
 from io import BytesIO
 
 import pandas as pd
 from PIL import Image
 
 import streamlit as st
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+
+from src.configs.analysis_data import TemplateAnalysisData
+from src.configs.render_data import TemplateRenderData
 from src.utils import find_project_root, load_rgb
-
-# Check pipeline state before rendering viewer
-if st.session_state.get("pipeline_error"):
-    st.error("⚠️ Pipeline failed. Please fix the error and rerun from the Setup page.")
-    st.stop()
-
-if not st.session_state.get("pipeline_run", False):
-    st.info(
-        "ℹ️ No pipeline results available. Please run the pipeline from the Setup page."
-    )
-    st.stop()
 
 PROJECT_ROOT = find_project_root()
 
-render_data = st.session_state.render_data
-analysis_data = st.session_state.analysis_data
-
-# -------------------------------------------------------------------
-# Page title and scene info
-# -------------------------------------------------------------------
+# Page config
 st.set_page_config(
-    page_title="3D Pipeline Analysis",
-    page_icon="📊",
+    page_title="3D from Planar Templates",
+    page_icon="📐",
     layout="wide",
 )
 
 
+# ============================================================================
+# Session State Validation
+# ============================================================================
+def validate_pipeline_state():
+    """Check if pipeline has run successfully before rendering analysis."""
+    if st.session_state.get("pipeline_error"):
+        st.error(
+            "⚠️ Pipeline failed. Please fix the error and rerun from the Setup page."
+        )
+        st.stop()
+
+    if not st.session_state.get("pipeline_run", False):
+        st.info(
+            "ℹ️ No pipeline results available. Please run the pipeline from the Setup page."
+        )
+        st.stop()
+
+
+# ============================================================================
+# Data Loading and Caching
+# ============================================================================
 @st.cache_data
 def load_and_cache_image(path: str) -> Image.Image:
     """Load an image file and cache it as PIL Image."""
@@ -59,79 +71,126 @@ def get_image_base64(path: str, max_height: int = None) -> str:
     return base64.b64encode(buffered.getvalue()).decode()
 
 
-# -------------------------------------------------------------------
-# Summary statistics as cards
-# -------------------------------------------------------------------
-summary = analysis_data.get_summary_stats()
-st.subheader("Summary Metrics")
+# ============================================================================
+# UI Components
+# ============================================================================
+def vspace(lines=1):
+    for _ in range(lines):
+        st.markdown("")
 
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Total Templates", summary["total_templates"], border=True)
-col2.metric("Templates with Ground-truth", summary["templates_with_gt"], border=True)
-col3.metric(
-    "Mean Absolute Error",
-    f"{summary['mean_error_abs']:.3f} {summary['units']}"
-    if summary["mean_error_abs"] is not None
-    else "N/A",
-    border=True,
-)
-col4.metric(
-    "Mean Relative Error",
-    f"{summary['mean_error_rel']:.2f} %"
-    if summary["mean_error_rel"] is not None
-    else "N/A",
-    border=True,
-)
 
-if summary["templates_with_gt"] > 0:
-    st.markdown(
-        f"**Absolute Error Range:** {summary['min_error_abs']:.3f} – {summary['max_error_abs']:.3f} {summary['units']}"
+def render_summary_metrics(summary: dict):
+    """Display summary statistics as metric cards."""
+    st.subheader("Summary Metrics")
+
+    units = summary["units"]
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Total Templates", summary["total_templates"], border=True)
+    col2.metric(
+        "Templates with Ground-truth", summary["templates_with_gt"], border=True
     )
-    if summary["mean_error_rel"] is not None:
-        st.markdown(
-            f"**Relative Error Range:** {summary['min_error_rel']:.2f}% – {summary['max_error_rel']:.2f}%"
+    col3.metric(
+        "Mean Absolute Error",
+        f"{summary['mean_error_abs']:.3f} {units}"
+        if summary["mean_error_abs"] is not None
+        else "N/A",
+        border=True,
+    )
+    col4.metric(
+        "Mean Relative Error",
+        f"{summary['mean_error_rel']:.2f} %"
+        if summary["mean_error_rel"] is not None
+        else "N/A",
+        border=True,
+    )
+
+    if summary["templates_with_gt"] > 1:
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.metric(
+                "Absolute Error Range",
+                f"{summary['min_error_abs']:.3f} – {summary['max_error_abs']:.3f} {units}",
+                border=True,
+            )
+        with col_b:
+            st.metric(
+                "Relative Error Range",
+                f"{summary['min_error_rel']:.2f} – {summary['max_error_rel']:.2f}%",
+                border=True,
+            )
+
+
+def build_analysis_table(render_data, analysis_data, units: str) -> pd.DataFrame:
+    """Build a DataFrame with per-template analysis data."""
+    table_data = []
+
+    t_render: TemplateRenderData
+    t_analysis: TemplateAnalysisData
+    for t_render, t_analysis in zip(render_data.templates, analysis_data.templates):
+        texture_path = PROJECT_ROOT / t_render.texture_path
+
+        # Get base64 image for preview
+        img_str = get_image_base64(str(texture_path), max_height=160)
+        img_data_uri = f"data:image/png;base64,{img_str}" if img_str else None
+
+        table_data.append(
+            {
+                "Preview": img_data_uri,
+                "ID": t_render.id,
+                "Label": t_render.label,
+                f"Width ({units})": t_render.width,
+                f"Height ({units})": t_render.height,
+                f"Predicted Distance ({units})": t_analysis.distance_pred,
+                f"True Distance ({units})": t_analysis.distance_true
+                if t_analysis.distance_true is not None
+                else "N/A",
+                f"Absolute Error ({units})": t_analysis.error_abs
+                if t_analysis.error_abs is not None
+                else "N/A",
+                "Relative Error (%)": t_analysis.error_rel
+                if t_analysis.error_rel is not None
+                else "N/A",
+            }
         )
 
-st.divider()
+    return pd.DataFrame(table_data)
 
-# -------------------------------------------------------------------
-# Template-level table (sortable)
-# -------------------------------------------------------------------
-st.subheader("Per-Template Analysis Table")
 
-table_data = []
-for template_render, template_analysis in zip(
-    render_data.templates, analysis_data.templates
-):
-    texture_path = PROJECT_ROOT / template_render.texture_path
+def render_analysis_table(df: pd.DataFrame):
+    """Display the per-template analysis table."""
+    st.subheader("Per-Template Analysis Table")
 
-    # Use cached function - done!
-    img_str = get_image_base64(str(texture_path), max_height=160)
-    img_html = (
-        f'<img src="data:image/png;base64,{img_str}" width="80">' if img_str else ""
+    st.dataframe(
+        df,
+        column_config={
+            "Preview": st.column_config.ImageColumn(
+                "Preview",
+            )
+        },
+        hide_index=True,
+        row_height=80,
     )
 
-    table_data.append(
-        {
-            "Preview": img_html,
-            "ID": template_render.id,
-            "Label": template_render.label,
-            "Width": template_render.width,
-            "Height": template_render.height,
-            "Predicted Distance": template_analysis.distance_pred,
-            "True Distance": template_analysis.distance_true
-            if template_analysis.distance_true is not None
-            else "N/A",
-            "Absolute Error": template_analysis.error_abs
-            if template_analysis.error_abs is not None
-            else "N/A",
-            "Relative Error (%)": template_analysis.error_rel
-            if template_analysis.error_rel is not None
-            else "N/A",
-        }
-    )
 
-df = pd.DataFrame(table_data)
+# ============================================================================
+# Page Logic
+# ============================================================================
+validate_pipeline_state()
 
-# Display with HTML rendering for images
-st.markdown(df.to_html(escape=False, index=False), unsafe_allow_html=True)
+# Load data from session state
+render_data = st.session_state.render_data
+analysis_data = st.session_state.analysis_data
+
+# Get summary statistics
+summary = analysis_data.get_summary_stats()
+units = summary["units"]
+
+# Render summary metrics
+render_summary_metrics(summary)
+
+vspace(2)
+
+# Build and render analysis table
+df = build_analysis_table(render_data, analysis_data, units)
+render_analysis_table(df)

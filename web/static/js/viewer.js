@@ -14,6 +14,9 @@ function initViewer(meshesData, linesData, templateMetadata, templateResults) {
     metadata = templateMetadata;
     results = templateResults;
 
+    // Display scene info
+    displaySceneInfo();
+
     setupScene();
     setupLighting();
     
@@ -37,6 +40,19 @@ function initViewer(meshesData, linesData, templateMetadata, templateResults) {
     window.addEventListener('resize', onWindowResize);
 }
 
+function displaySceneInfo() {
+    if (metadata.scene_id) {
+        document.getElementById('sceneId').textContent = metadata.scene_id;
+    }
+    if (metadata.units) {
+        document.getElementById('sceneUnits').textContent = metadata.units;
+    }
+    if (metadata.image_size) {
+        document.getElementById('sceneImageSize').textContent = 
+            `${metadata.image_size.width} × ${metadata.image_size.height}`;
+    }
+}
+
 function setupScene() {
     scene = new THREE.Scene();
     camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
@@ -47,7 +63,7 @@ function setupScene() {
     document.body.appendChild(renderer.domElement);
     
     // Position camera
-    camera.position.set(3, 3, -10);
+    camera.position.set(0.2, 0.2, -0.7);
     camera.lookAt(0, 0, 0);
 }
 
@@ -68,7 +84,7 @@ function createMeshes(meshesData) {
     // Store distances for each mesh
     const allDistances = [];
     
-    meshesData.forEach((meshData, index) => {
+    meshesData.forEach((meshData) => {
         const geometry = new THREE.BufferGeometry();
         const vertices = new Float32Array(meshData.vertices.flat());
         const indices = new Uint16Array(meshData.triangles.flat());
@@ -89,10 +105,8 @@ function createMeshes(meshesData) {
     maxDistance = globalMaxDistance;
     minDistance = globalMinDistance;
     
-    console.log(`Global - Max Distance: ${maxDistance}, Min Distance: ${minDistance}`);
-    
     // Create all meshes
-    allDistances.forEach(({ geometry, vertices, indices, distances, meshData }, index) => {
+    allDistances.forEach(({ geometry, vertices, indices, distances, meshData }) => {
         geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
         geometry.setIndex(new THREE.BufferAttribute(indices, 1));
         geometry.computeVertexNormals();
@@ -118,7 +132,7 @@ function createMeshes(meshesData) {
                 const material = new THREE.ShaderMaterial({
                     uniforms: {
                         texture1: { value: texture },
-                        backColor: { value: new THREE.Color(0xff0000) },
+                        backColor: { value: new THREE.Color(0xf1ffc4) },
                         maxDistance: { value: maxDistance },
                         minDistance: { value: minDistance },
                         useDistanceMode: { value: false },
@@ -254,21 +268,30 @@ function selectTemplate(templateId) {
     });
 
     // Update info panel
-    const data = metadata[templateId];
+    const templateData = metadata.templates[templateId];
     const result = results[templateId];
     
     document.getElementById('templateId').textContent = templateId;
-    document.getElementById('templateLabel').textContent = data?.label || 'N/A';
+    document.getElementById('templateLabel').textContent = templateData?.label || 'N/A';
     document.getElementById('templateDimensions').textContent = 
-        (data?.width && data?.height) ? `${data.width} x ${data.height}` : 'N/A';
+        (templateData?.width && templateData?.height) 
+            ? `${templateData.width.toFixed(1)} × ${templateData.height.toFixed(1)}` 
+            : 'N/A';
+    
+    // Handle predicted distance
     document.getElementById('templateDistancePred').textContent = 
-        result?.distance_pred?.toFixed(2) || 'N/A';
-    document.getElementById('templateDistanceTrue').textContent = 
-        result?.distance_true?.toFixed(2) || 'N/A';
-    document.getElementById('templateError').textContent = 
-        result?.error?.toFixed(2) || 'N/A';
-    document.getElementById('templateErrorPercent').textContent = 
-        result?.error_percent?.toFixed(2) + '%' || 'N/A';
+        result?.distance_pred ? result.distance_pred.toFixed(2) : 'N/A';
+    
+    // Handle ground truth and errors (may not exist)
+    if (result?.distance_true !== undefined) {
+        document.getElementById('templateDistanceTrue').textContent = result.distance_true.toFixed(2);
+        document.getElementById('templateError').textContent = result.error_abs.toFixed(2);
+        document.getElementById('templateErrorPercent').textContent = `${result.error_rel.toFixed(2)}%`;
+    } else {
+        document.getElementById('templateDistanceTrue').textContent = 'N/A';
+        document.getElementById('templateError').textContent = 'N/A';
+        document.getElementById('templateErrorPercent').textContent = 'N/A';
+    }
 
     // Display the info panel
     document.getElementById('templateDetailsPanel').style.display = 'block';
